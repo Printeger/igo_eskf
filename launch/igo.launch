@@ -1,0 +1,19 @@
+<launch>
+	<arg name="rviz" default="false" />
+	<arg name="en_debug" default="false" />
+
+	<rosparam command="load" file="$(find igo_eskf)/config/igo.yaml" />
+    <param name="max_iteration" type="int" value="5" />
+
+	<group if="$(arg en_debug)">
+    <node pkg="igo_eskf" type="igo_eskf" name="igo_eskf" output="screen" launch-prefix="gdb -ex run --args" /> 
+	</group>
+
+    <node pkg="igo_eskf" type="igo_eskf" name="igo_eskf" output="screen" /> 
+
+	<!-- <node pkg="rosbag" type="play" name="rosbag_play" args="-wait-for-subscribers -r 1 /home/mint/data/uwb_imu_lidar_vicon/uwb_imu_lidar_vicon_square_2024-07-09-19-53-26.bag"/> -->
+
+	<group if="$(arg rviz)">
+	<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find igo_eskf)/config/inno_lio.rviz" />
+	</group>
+</launch>

@@ -1,9 +1,8 @@
 common:
     lid_topic:  "/iv_points"
     gps_topic: "/ublox_driver/receiver_pvt"
-    imu_topic:  "/mavros/imu/data_raw"
+    imu_topic:  "/imu/data"
     uwb_topic: "/nlink_linktrack_nodeframe2"
-    mag_topic: "/mavros/imu/mag"
     vicon_topic: "/vrpn_client_node/uwb_ngx_tag/pose"
     file_save_path: "/home/mint/ws_fusion_uwb/src/igo_eskf/data/"
     en_vicon: true

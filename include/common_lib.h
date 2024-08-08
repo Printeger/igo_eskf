@@ -69,6 +69,7 @@ struct GPSGroup {
   V3D LLA;
   V3D UTM;
   V3D velocity;
+  V3D magnetic;
 };
 
 // Lidar data and imu dates for the curent process

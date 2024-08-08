@@ -9,23 +9,19 @@ class ESKF {
   ESKF() {};
   ~ESKF() {};
 
-  bool Init(sensor_msgs::Imu::Ptr &curr_imu_data);
   bool Init(
       sensor_msgs::Imu::Ptr &curr_imu_data, const vector<double> &cov_prior_pos,
       const vector<double> &cov_prior_vel, const vector<double> &cov_prior_ori,
       const vector<double> &cov_prior_epsilon,
       const vector<double> &cov_prior_delta, const vector<double> &cov_meas_pos,
       const vector<double> &cov_proc_gyro, const vector<double> &cov_proc_acc);
-  bool Init(sensor_msgs::Imu::Ptr &curr_imu_data, GPSGroup &curr_gps_,
-            const vector<double> &cov_prior_pos,
-            const vector<double> &cov_prior_vel,
-            const vector<double> &cov_prior_ori,
-            const vector<double> &cov_prior_epsilon,
-            const vector<double> &cov_prior_delta,
-            const vector<double> &cov_meas_pos,
-            const vector<double> &cov_proc_gyro,
-            const vector<double> &cov_proc_acc);
-
+  bool Init(
+      sensor_msgs::Imu::Ptr &curr_imu_data, const vector<double> &cov_prior_pos,
+      const vector<double> &cov_prior_vel, const vector<double> &cov_prior_ori,
+      const vector<double> &cov_prior_epsilon,
+      const vector<double> &cov_prior_delta,
+      const vector<double> &cov_proc_gyro, const vector<double> &cov_proc_acc,
+      const vector<double> &cov_meas_pos, const vector<double> &cov_meas_vel);
   /*!
    * 滤波器的预测，对应卡尔曼滤波器的前两个公式
    * @param curr_imu_data
@@ -45,14 +41,11 @@ class ESKF {
   Eigen::Vector3d GetVelocity() { return velocity_; }
 
  private:
-  void SetCovarianceQ(double gyro_noise_cov, double accel_noise_cov);
-  void SetCovarianceR(double posi_noise_cov);
-  void SetCovarianceP(double posi_noise, double velo_noise, double ori_noise,
-                      double gyro_noise, double accel_noise);
-
   void SetCovarianceQ(const vector<double> &gyro_noise_cov,
                       const vector<double> &accel_noise_cov);
   void SetCovarianceR(const vector<double> &posi_noise_cov);
+  void SetCovarianceR(const vector<double> &posi_meas_cov,
+                      const vector<double> &velo_meas_cov);
   void SetCovarianceP(const vector<double> &posi_noise,
                       const vector<double> &velo_noise,
                       const vector<double> &ori_noise,
@@ -116,8 +109,8 @@ class ESKF {
  private:
   static const unsigned int DIM_STATE_ = 15;
   static const unsigned int DIM_STATE_NOISE = 6;
-  static const unsigned int DIM_MEASUREMENT = 3;
-  static const unsigned int DIM_MEASUREMENT_NOISE = 3;
+  static const unsigned int DIM_MEASUREMENT = 6;
+  static const unsigned int DIM_MEASUREMENT_NOISE = 6;
 
   static const unsigned int INDEX_STATE_POSI = 0;
   static const unsigned int INDEX_STATE_VEL = 3;
@@ -125,6 +118,7 @@ class ESKF {
   static const unsigned int INDEX_STATE_GYRO_BIAS = 9;
   static const unsigned int INDEX_STATE_ACC_BIAS = 12;
   static const unsigned int INDEX_MEASUREMENT_POSI = 0;
+  static const unsigned int INDEX_MEASUREMENT_VEL = 3;
 
   typedef typename Eigen::Matrix<double, DIM_STATE_, 1> TypeVectorX;
   typedef typename Eigen::Matrix<double, DIM_MEASUREMENT, 1> TypeVectorY;
@@ -169,32 +163,14 @@ class ESKF {
   Eigen::Vector3d w_;  // 地球自传角速度
 
   GPSGroup curr_gps_data_;
-
   double L_ = 0.0;  // 纬度
-
   std::deque<sensor_msgs::Imu::Ptr> imu_data_buff_;
   // std::deque<IMUData> imu_data_buff_;
-
   double curr_timestamp = 0.0;
 
  public:
   void GetFGY(TypeMatrixF &F, TypeMatrixG &G, TypeVectorY &Y);
   int count_debug = 0;
-
-  double prior_cov_pos = 1.0e-4;
-  double prior_cov_vel = 1.0e-4;
-  double prior_cov_ori = 1.0e-6;
-  double prior_cov_epsilon = 1.0e-6;
-  double prior_cov_delta = 1.0e-6;
-  double meas_cov_pos = 1.0e-4;
-  // double meas_cov_pos = 5;
-
-  // double proc_cov_gyro = 1.0e-5;
-  // double proc_cov_acc = 1.0e-4;
-
-  double proc_cov_gyro = 0.01;
-  double proc_cov_acc = 0.02;
-
   double earth_rotation_speed = 7.272205216e-05;
   double gravity = 9.79484197226504;
   bool flg_eskf_init = false;
@@ -210,35 +186,6 @@ Eigen::Matrix3d BuildSkewMatrix(const Eigen::Vector3d &vec) {
 }
 
 // P: 先验的协方差  R：测量的协方差   Q：过程的协方差
-// Q：过程的协方差
-void ESKF::SetCovarianceQ(double gyro_noise, double accel_noise) {
-  Q_.setZero();
-  Q_.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * gyro_noise * gyro_noise;
-  Q_.block<3, 3>(3, 3) =
-      Eigen::Matrix3d::Identity() * accel_noise * accel_noise;
-}
-// R：测量的协方差
-void ESKF::SetCovarianceR(double posi_noise) {
-  R_.setZero();
-  R_ = Eigen::Matrix3d::Identity() * posi_noise * posi_noise;
-}
-// P: 先验的协方差
-void ESKF::SetCovarianceP(double posi_noise, double velo_noise,
-                          double ori_noise, double gyro_noise,
-                          double accel_noise) {
-  P_.setZero();
-  P_.block<3, 3>(INDEX_STATE_POSI, INDEX_STATE_POSI) =
-      Eigen::Matrix3d::Identity() * posi_noise;
-  P_.block<3, 3>(INDEX_STATE_VEL, INDEX_STATE_VEL) =
-      Eigen::Matrix3d::Identity() * velo_noise;
-  P_.block<3, 3>(INDEX_STATE_ORI, INDEX_STATE_ORI) =
-      Eigen::Matrix3d::Identity() * ori_noise;
-  P_.block<3, 3>(INDEX_STATE_GYRO_BIAS, INDEX_STATE_GYRO_BIAS) =
-      Eigen::Matrix3d::Identity() * gyro_noise;
-  P_.block<3, 3>(INDEX_STATE_ACC_BIAS, INDEX_STATE_ACC_BIAS) =
-      Eigen::Matrix3d::Identity() * accel_noise;
-}
-
 void ESKF::SetCovarianceQ(const vector<double> &gyro_noise_cov,
                           const vector<double> &accel_noise_cov) {
   //   Q_.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * gyro_noise *
@@ -253,6 +200,7 @@ void ESKF::SetCovarianceQ(const vector<double> &gyro_noise_cov,
   Q_(4, 4) = accel_noise_cov[1] * accel_noise_cov[1];
   Q_(5, 5) = accel_noise_cov[2] * accel_noise_cov[2];
 }
+
 void ESKF::SetCovarianceR(const vector<double> &posi_noise_cov) {
   // R_ = Eigen::Matrix3d::Identity() * posi_noise * posi_noise;
   R_.setZero();
@@ -260,6 +208,18 @@ void ESKF::SetCovarianceR(const vector<double> &posi_noise_cov) {
   R_(1, 1) = posi_noise_cov[1] * posi_noise_cov[1];
   R_(2, 2) = posi_noise_cov[2] * posi_noise_cov[2];
 }
+
+void ESKF::SetCovarianceR(const vector<double> &posi_meas_cov,
+                          const vector<double> &velo_meas_cov) {
+  R_.setZero();
+  R_(0, 0) = posi_meas_cov[0] * posi_meas_cov[0];
+  R_(1, 1) = posi_meas_cov[1] * posi_meas_cov[1];
+  R_(2, 2) = posi_meas_cov[2] * posi_meas_cov[2];
+  R_(3, 3) = velo_meas_cov[0] * velo_meas_cov[0];
+  R_(4, 4) = velo_meas_cov[1] * velo_meas_cov[1];
+  R_(5, 5) = velo_meas_cov[2] * velo_meas_cov[2];
+}
+
 void ESKF::SetCovarianceP(const vector<double> &posi_noise,
                           const vector<double> &velo_noise,
                           const vector<double> &ori_noise,
@@ -288,21 +248,28 @@ void ESKF::SetCovarianceP(const vector<double> &posi_noise,
   }
 }
 
-bool ESKF::Init(sensor_msgs::Imu::Ptr &curr_imu_data) {
+bool ESKF::Init(
+    sensor_msgs::Imu::Ptr &curr_imu_data, const vector<double> &cov_prior_pos,
+    const vector<double> &cov_prior_vel, const vector<double> &cov_prior_ori,
+    const vector<double> &cov_prior_epsilon,
+    const vector<double> &cov_prior_delta, const vector<double> &cov_proc_gyro,
+    const vector<double> &cov_proc_acc, const vector<double> &cov_meas_pos) {
   g_ = Eigen::Vector3d(0.0, 0.0, -gravity);
   // w_ = Eigen::Vector3d(0.0, earth_rotation_speed * cos(L_ * kDegree2Radian),
   //                      earth_rotation_speed * sin(L_ * kDegree2Radian));
   w_ = Eigen::Vector3d(0.0, 0.0, 0.0);
 
-  SetCovarianceP(prior_cov_pos, prior_cov_vel, prior_cov_ori, prior_cov_epsilon,
-                 prior_cov_delta);
-  SetCovarianceR(meas_cov_pos);
-  SetCovarianceQ(proc_cov_gyro, proc_cov_acc);
+  SetCovarianceP(cov_prior_pos, cov_prior_vel, cov_prior_ori, cov_prior_epsilon,
+                 cov_prior_delta);
+  SetCovarianceR(cov_meas_pos);
+  SetCovarianceQ(cov_proc_gyro, cov_proc_acc);
 
   X_.setZero();
   F_.setZero();
   C_.setIdentity();
   G_.block<3, 3>(INDEX_MEASUREMENT_POSI, INDEX_MEASUREMENT_POSI) =
+      Eigen::Matrix3d::Identity();
+  G_.block<3, 3>(INDEX_MEASUREMENT_VEL, INDEX_MEASUREMENT_VEL) =
       Eigen::Matrix3d::Identity();
   F_.block<3, 3>(INDEX_STATE_POSI, INDEX_STATE_VEL) =
       Eigen::Matrix3d::Identity();
@@ -329,7 +296,8 @@ bool ESKF::Init(
     const vector<double> &cov_prior_vel, const vector<double> &cov_prior_ori,
     const vector<double> &cov_prior_epsilon,
     const vector<double> &cov_prior_delta, const vector<double> &cov_proc_gyro,
-    const vector<double> &cov_proc_acc, const vector<double> &cov_meas_pos) {
+    const vector<double> &cov_proc_acc, const vector<double> &cov_meas_pos,
+    const vector<double> &cov_meas_vel) {
   g_ = Eigen::Vector3d(0.0, 0.0, -gravity);
   // w_ = Eigen::Vector3d(0.0, earth_rotation_speed * cos(L_ * kDegree2Radian),
   //                      earth_rotation_speed * sin(L_ * kDegree2Radian));
@@ -337,13 +305,15 @@ bool ESKF::Init(
 
   SetCovarianceP(cov_prior_pos, cov_prior_vel, cov_prior_ori, cov_prior_epsilon,
                  cov_prior_delta);
-  SetCovarianceR(cov_meas_pos);
+  SetCovarianceR(cov_meas_pos, cov_meas_vel);
   SetCovarianceQ(cov_proc_gyro, cov_proc_acc);
 
   X_.setZero();
   F_.setZero();
   C_.setIdentity();
   G_.block<3, 3>(INDEX_MEASUREMENT_POSI, INDEX_MEASUREMENT_POSI) =
+      Eigen::Matrix3d::Identity();
+  G_.block<3, 3>(INDEX_MEASUREMENT_VEL, INDEX_MEASUREMENT_VEL) =
       Eigen::Matrix3d::Identity();
   F_.block<3, 3>(INDEX_STATE_POSI, INDEX_STATE_VEL) =
       Eigen::Matrix3d::Identity();
@@ -365,56 +335,6 @@ bool ESKF::Init(
   return true;
 }
 
-bool ESKF::Init(sensor_msgs::Imu::Ptr &curr_imu_data, GPSGroup &curr_gps_,
-                const vector<double> &cov_prior_pos,
-                const vector<double> &cov_prior_vel,
-                const vector<double> &cov_prior_ori,
-                const vector<double> &cov_prior_epsilon,
-                const vector<double> &cov_prior_delta,
-                const vector<double> &cov_meas_pos,
-                const vector<double> &cov_proc_gyro,
-                const vector<double> &cov_proc_acc) {
-  g_ = Eigen::Vector3d(0.0, 0.0, -gravity);
-  // w_ = Eigen::Vector3d(0.0, earth_rotation_speed * cos(L_ * kDegree2Radian),
-  //                      earth_rotation_speed * sin(L_ * kDegree2Radian));
-  w_ = Eigen::Vector3d(0.0, 0.0, 0.0);
-
-  SetCovarianceP(cov_prior_pos, cov_prior_vel, cov_prior_ori, cov_prior_epsilon,
-                 cov_prior_delta);
-  SetCovarianceR(cov_meas_pos);
-  SetCovarianceQ(cov_proc_gyro, cov_proc_acc);
-
-  X_.setZero();
-  F_.setZero();
-  C_.setIdentity();
-  G_.block<3, 3>(INDEX_MEASUREMENT_POSI, INDEX_MEASUREMENT_POSI) =
-      Eigen::Matrix3d::Identity();
-  F_.block<3, 3>(INDEX_STATE_POSI, INDEX_STATE_VEL) =
-      Eigen::Matrix3d::Identity();
-  F_.block<3, 3>(INDEX_STATE_ORI, INDEX_STATE_ORI) = BuildSkewMatrix(-w_);
-  init_velocity_ << 0, 0, 0;
-  velocity_ = init_velocity_;
-  // Eigen::Quaterniond Q =
-  //     Eigen::AngleAxisd(90 * kDegree2Radian + curr_gps_.magnetic[0],
-  //                       Eigen::Vector3d::UnitZ()) *
-  //     Eigen::AngleAxisd(0 * kDegree2Radian, Eigen::Vector3d::UnitY()) *
-  //     Eigen::AngleAxisd(180 * kDegree2Radian, Eigen::Vector3d::UnitX());
-  Eigen::Quaterniond Q =
-      Eigen::AngleAxisd(0 * kDegree2Radian + curr_gps_.magnetic[0],
-                        Eigen::Vector3d::UnitZ()) *
-      Eigen::AngleAxisd(0 * kDegree2Radian, Eigen::Vector3d::UnitY()) *
-      Eigen::AngleAxisd(0 * kDegree2Radian, Eigen::Vector3d::UnitX());
-  init_pose_.block<3, 3>(0, 0) = Q.toRotationMatrix();
-  pose_ = init_pose_;
-
-  imu_data_buff_.clear();
-  imu_data_buff_.push_back(curr_imu_data);
-
-  flg_eskf_init = true;
-
-  return true;
-}
-
 void ESKF::GetFGY(TypeMatrixF &F, TypeMatrixG &G, TypeVectorY &Y) {
   F = Ft_;
   G = G_;
@@ -422,13 +342,25 @@ void ESKF::GetFGY(TypeMatrixF &F, TypeMatrixG &G, TypeVectorY &Y) {
 }
 // 观测方程：Y = G * x + R
 bool ESKF::Correct(const GPSGroup &curr_gps_data) {
-  //   curr_timestamp = curr_gps_data.timestamp;
+  // curr_timestamp = curr_gps_data.timestamp;
   curr_gps_data_ = curr_gps_data;
-  Eigen::Vector3d curr_gps_ned;
+  Eigen::Vector3d curr_gps_ned, curr_gps_vel;
   curr_gps_ned << curr_gps_data_.UTM[0], curr_gps_data_.UTM[1],
       curr_gps_data_.UTM[2];
+  curr_gps_vel << curr_gps_data_.velocity[0], curr_gps_data_.velocity[1],
+      curr_gps_data_.velocity[2];
   // 测量误差，Y = gps_mesure - imu_predict, 依赖GPS提供初值
-  Y_ = pose_.block<3, 1>(0, 3) - curr_gps_ned;
+  // Eigen::Matrix<double, DIM_MEASUREMENT, 1> TypeVectorY ;
+  // Y_.setZero();
+  ROS_INFO("curr_gps_ned: %f, %f, %f", curr_gps_ned[0], curr_gps_ned[1],
+           curr_gps_ned[2]);
+  ROS_INFO("curr_gps_vel: %f, %f, %f", curr_gps_vel[0], curr_gps_vel[1],
+           curr_gps_vel[2]);
+  ROS_INFO("velocity_: %f, %f, %f", velocity_[0], velocity_[1], velocity_[2]);
+  Eigen::Vector3d tmp_ = Eigen::Vector3d::Zero();
+  Y_.block<3, 1>(0, 0) = pose_.block<3, 1>(0, 3) - curr_gps_ned;
+  Y_.block<3, 1>(3, 0) = velocity_ - curr_gps_vel;
+
   // Kalman 增益
   K_ = P_ * G_.transpose() *
        (G_ * P_ * G_.transpose() + C_ * R_ * C_.transpose()).inverse();
@@ -438,15 +370,22 @@ bool ESKF::Correct(const GPSGroup &curr_gps_data) {
   X_ = X_ + K_ * (Y_ - G_ * X_);
 
   // ======= DEBUG: is residual covergence? ========= //
-  // std::string write_path_1 =
-  // "/home/mint/ws_fusion_uwb/src/inno_ligo/data/res/residual.txt";
-  // std::ofstream outfile_1;
-  // outfile_1.open(write_path_1, std::ofstream::app);
-  // outfile_1 << setprecision(19) << curr_timestamp << " " << Y_(0) << " " <<
-  // Y_(1) << " " << Y_(2) << " " << 0 << "
-  // "
-  //           << 0 << " " << 0 << " " << 1 << std::endl;
-  // outfile_1.close();
+  std::string write_path_1 =
+      "/home/mint/ws_fusion_uwb/src/igo_eskf/data/res/residual_vel.txt";
+  std::ofstream outfile_1;
+  outfile_1.open(write_path_1, std::ofstream::app);
+  outfile_1 << setprecision(19) << curr_timestamp << " " << Y_(3) << " "
+            << Y_(4) << " " << Y_(5) << " " << 0 << " " << 0 << " " << 0 << " "
+            << 1 << std::endl;
+  outfile_1.close();
+  std::string write_path_2 =
+      "/home/mint/ws_fusion_uwb/src/igo_eskf/data/res/residual_posi.txt";
+  std::ofstream outfile_2;
+  outfile_2.open(write_path_2, std::ofstream::app);
+  outfile_2 << setprecision(19) << curr_timestamp << " " << Y_(0) << " "
+            << Y_(1) << " " << Y_(2) << " " << 0 << " " << 0 << " " << 0 << " "
+            << 1 << std::endl;
+  outfile_2.close();
   // std::cout << "X_: " << X_ << std::endl;
   // 迭代完后，将最终得到的误差重新带回到预测的位置、速度、方向中消除掉这个误差
   EliminateError();
@@ -537,7 +476,7 @@ bool ESKF::UpdateOdomEstimation() {
   ComputeAngularDelta(angular_delta);
 
   Eigen::Matrix3d R_nm_nm_1 = Eigen::Matrix3d::Identity();
-  // ComputeEarthTranform(R_nm_nm_1);
+  //   ComputeEarthTranform(R_nm_nm_1);
 
   Eigen::Matrix3d curr_R, last_R;
   ComputeOrientation(angular_delta, R_nm_nm_1, curr_R, last_R);
@@ -603,16 +542,16 @@ bool ESKF::ComputeEarthTranform(Eigen::Matrix3d &R_nm_nm_1) {
   constexpr double rm = 6353346.18315;  // 极半径
   constexpr double rn = 6384140.52699;  // 赤道半径
   // TODO  根据GPS测速计算观测的角速度
-  Eigen::Vector3d w_en_n(-velocity_[1] / (rm + curr_gps_data_.UTM[2]),
-                         velocity_[0] / (rn + curr_gps_data_.UTM[2]),
-                         velocity_[0] / (rn + curr_gps_data_.UTM[2]) *
-                             std::tan(curr_gps_data_.LLA[0] * kDegree2Radian));
+  //   Eigen::Vector3d w_en_n(-velocity_[1] / (rm + curr_gps_data_.UTM[2]),
+  //   velocity_[0] / (rn + curr_gps_data_.UTM[2]),
+  //                          velocity_[0] / (rn + curr_gps_data_.UTM[2]) *
+  //                              std::tan(curr_gps_data_.LLA[0] *
+  //                              kDegree2Radian));
   // *0215
-  // Eigen::Vector3d w_en_n(velocity_[1] / (rm + curr_gps_data_.UTM[2]),
-  //                        velocity_[0] / (rn + curr_gps_data_.UTM[2]) *
-  //                            std::tan(curr_gps_data_.LLA[0] *
-  //                            kDegree2Radian),
-  //                        velocity_[0] / (rn + curr_gps_data_.UTM[2]));
+  Eigen::Vector3d w_en_n(velocity_[1] / (rm + curr_gps_data_.UTM[2]),
+                         velocity_[0] / (rn + curr_gps_data_.UTM[2]) *
+                             std::tan(curr_gps_data_.LLA[0] * kDegree2Radian),
+                         velocity_[0] / (rn + curr_gps_data_.UTM[2]));
   // 考虑地球自传角速度w_
   Eigen::Vector3d w_in_n = w_en_n + w_;
   // Eigen::Vector3d w_in_n = w_;
@@ -670,8 +609,7 @@ bool ESKF::ComputeVelocity(Eigen::Vector3d &curr_vel, Eigen::Vector3d &last_vel,
       curr_imu_data->linear_acceleration.y,
       curr_imu_data->linear_acceleration.z;
   Eigen::Vector3d curr_unbias_accel = GetUnbiasAccel(curr_R * curr_accel);
-  // ROS_WARN("curr_unbias_accel: %f %f %f", curr_unbias_accel[0],
-  //          curr_unbias_accel[1], curr_unbias_accel[2]);
+
   Eigen::Vector3d last_accel;
   last_accel << last_imu_data->linear_acceleration.x,
       last_imu_data->linear_acceleration.y,
@@ -700,8 +638,9 @@ bool ESKF::ComputeVelocity(Eigen::Vector3d &curr_vel, Eigen::Vector3d &last_vel,
 }
 
 Eigen::Vector3d ESKF::GetUnbiasAccel(const Eigen::Vector3d &accel) {
-  //    return accel - accel_bias_ + g_;
-  return accel - g_;
+  // TODO
+  return accel - accel_bias_ + g_;
+  // return accel + g_;
 }
 // position consider last frame
 bool ESKF::ComputePosition(const Eigen::Vector3d &curr_vel,

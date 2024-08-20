@@ -65,11 +65,11 @@ V3F Zero3f(0, 0, 0);
 
 struct GPSGroup {
   GPSGroup() {}
-  double timestamp;
-  V3D LLA;
-  V3D UTM;
-  V3D velocity;
-  V3D magnetic;
+  double timestamp = 0.0;
+  V3D LLA = Zero3d;
+  V3D UTM = Zero3d;
+  V3D velocity = Zero3d;
+  V3D magnetic = Zero3d;
 };
 
 // Lidar data and imu dates for the curent process

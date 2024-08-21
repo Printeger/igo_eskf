@@ -47,8 +47,6 @@ condition_variable sig_buffer;
 ofstream fout_pre, fout_out, fout_dbg;
 double solve_time = 0, solve_const_H_time = 0;
 double res_mean_last = 0.05, total_residual = 0.0;  // 设置残差平均值，残差总和
-double gyr_cov = 1.0e-5, acc_cov = 1.0e-4, b_gyr_cov = 0.0001,
-       b_acc_cov = 0.0001;
 double init_mag_heading = 0.0;
 double curr_heading_vel = 0.0;
 double curr_heading_angle = 0.0;
@@ -61,7 +59,9 @@ double last_imu_stamp = 0.0;
 int iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0,
     laserCloudValidNum = 0, count_ = 0, imu_slide_window_size = 10;
 double last_timestamp_imu = -1.0, last_timestamp_gps = 0, first_gps_time = 0.0,
-       last_timestamp_uwb, gps_curr_time = 0.0, imu_filter_n_sigma = 3;
+       last_timestamp_uwb, gps_curr_time = 0.0, imu_filter_n_sigma = 3,
+       init_duration = 0.0, init_init_stamp = 1e19;
+
 deque<double> time_buffer;
 deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
 deque<sensor_msgs::Imu::ConstPtr> imu_window_buffer;
@@ -72,9 +72,10 @@ deque<sensor_msgs::MagneticField> mavros_mag_buffer;
 
 bool flg_first_gps = true, path_en = true, flg_EKF_inited, en_vicon = false,
      en_debug = false, is_mag_heading_init = false, en_time_sync = false,
-     en_imu_init = false;
+     en_sensor_init = false, en_rtk_vel = false, is_sensor_init = false,
+     is_imu_recv = false;
 std::string imu_topic, gps_topic, uwb_topic, vicon_topic, mag_topic,
-    file_save_path;
+    file_save_path, pose_topic, odom_topic, path_topic;
 bool TRANSAXIS = true;
 
 vector<double> extrinT(3, 0.0);
@@ -88,6 +89,8 @@ V3D res_pos;
 V3D res_vel;
 V3D sum_acc(Zero3d), sum_gyr(Zero3d);
 V3D mean_acc(Zero3d), mean_gyr(Zero3d);
+V3D acc_offset(Zero3d);
+V3D gyr_offset(Zero3d);
 int cnt_imu = 0;
 Eigen::Quaterniond res_quat(0, 0, 0, 1);
 
@@ -111,6 +114,23 @@ nav_msgs::Odometry odomAftMapped;
 geometry_msgs::Quaternion geoQuat;
 geometry_msgs::PoseStamped msg_body_pose;
 
+bool sensor_init(deque<sensor_msgs::Imu::ConstPtr> &imu_buffer,
+                 V3D &acc_offset_, V3D &gyr_offset_) {
+  if (imu_buffer.size() < 100) {
+    return false;
+  }
+  V3D sum_acc(Zero3d), sum_gyr(Zero3d);
+  for (const auto &imu : imu_buffer) {
+    sum_acc += V3D(imu->linear_acceleration.x, imu->linear_acceleration.y,
+                   imu->linear_acceleration.z - gravity);
+    sum_gyr += V3D(imu->angular_velocity.x, imu->angular_velocity.y,
+                   imu->angular_velocity.z);
+  }
+  acc_offset_ = sum_acc / imu_buffer.size();
+  gyr_offset_ = sum_gyr / imu_buffer.size();
+  return true;
+}
+
 double get_stamp() {
   auto now = std::chrono::system_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -124,18 +144,15 @@ void format_imu(const sensor_msgs::Imu::ConstPtr &imu_in,
   imu_out->header.stamp = imu_in->header.stamp;
   imu_out->header.frame_id = imu_in->header.frame_id;
   // IMU+: x: forward, y: left, z: down
-  V3D acc_offset(0.0, -0.0, 0.0);
-  V3D gyr_offset(-1.0 - 06, -1.446528460784526517e-06,
-                 2.978023936997308257e-07);
   imu_out->linear_acceleration.x =
       imu_in->linear_acceleration.x - acc_offset[0];
   imu_out->linear_acceleration.y =
       imu_in->linear_acceleration.y - acc_offset[1];
   imu_out->linear_acceleration.z =
       imu_in->linear_acceleration.z - acc_offset[2];
-  imu_out->angular_velocity.x = imu_in->angular_velocity.x;
-  imu_out->angular_velocity.y = imu_in->angular_velocity.y;
-  imu_out->angular_velocity.z = imu_in->angular_velocity.z;
+  imu_out->angular_velocity.x = imu_in->angular_velocity.x - gyr_offset[0];
+  imu_out->angular_velocity.y = imu_in->angular_velocity.y - gyr_offset[1];
+  imu_out->angular_velocity.z = imu_in->angular_velocity.z - gyr_offset[2];
 
   if (en_debug) {
     cnt_imu++;
@@ -146,7 +163,7 @@ void format_imu(const sensor_msgs::Imu::ConstPtr &imu_in,
                    imu_out->angular_velocity.z);
     mean_acc = sum_acc / cnt_imu;
     mean_gyr = sum_gyr / cnt_imu;
-    std::string write_path1 = file_save_path + "acc_in.txt";
+    std::string write_path1 = file_save_path + "acc_in_" + time_str + ".txt";
     std::ofstream outfile1;
     outfile1.open(write_path1, std::ofstream::app);
     outfile1 << setprecision(19) << imu_out->header.stamp.toSec() << " "
@@ -155,7 +172,7 @@ void format_imu(const sensor_msgs::Imu::ConstPtr &imu_in,
              << imu_out->linear_acceleration.z << " " << mean_acc[0] << " "
              << mean_acc[1] << " " << mean_acc[2] << " " << 1 << std::endl;
     outfile1.close();
-    std::string write_path2 = file_save_path + "gyro_in.txt";
+    std::string write_path2 = file_save_path + "gyro_in_" + time_str + ".txt";
     std::ofstream outfile2;
     outfile2.open(write_path2, std::ofstream::app);
     outfile2 << setprecision(19) << imu_out->header.stamp.toSec() << " "
@@ -579,6 +596,10 @@ void gps_cbk_vel(const gnss_comm::GnssPVTSolnMsg::ConstPtr &gps_msg) {
 }
 
 void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in) {
+  if (!is_imu_recv) {
+    init_init_stamp = get_stamp();
+    is_imu_recv = true;
+  }
   sensor_msgs::Imu::Ptr tmp_msg(new sensor_msgs::Imu(*msg_in));
   if (en_time_sync) {
     double local_stamp = get_stamp();
@@ -592,38 +613,43 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in) {
     imu_buffer.clear();
   }
   last_timestamp_imu = timestamp;
-  sensor_msgs::Imu::Ptr temp_imu(new sensor_msgs::Imu(*tmp_msg));
-  format_imu(tmp_msg, temp_imu);
+  if (en_sensor_init && !is_sensor_init) {
+    imu_buffer.push_back(tmp_msg);
+  } else {
+    sensor_msgs::Imu::Ptr temp_imu(new sensor_msgs::Imu(*tmp_msg));
+    format_imu(tmp_msg, temp_imu);
 
-  imu_window_buffer.push_back(temp_imu);
-  if (imu_window_buffer.size() >= imu_slide_window_size) {
-    sensor_msgs::Imu::Ptr imu_filtered = slidingWindowFilter(
-        imu_window_buffer, imu_slide_window_size, imu_filter_n_sigma);
-    imu_buffer.push_back(imu_filtered);
+    imu_window_buffer.push_back(temp_imu);
+    if (imu_window_buffer.size() >= imu_slide_window_size) {
+      sensor_msgs::Imu::Ptr imu_filtered = slidingWindowFilter(
+          imu_window_buffer, imu_slide_window_size, imu_filter_n_sigma);
+      imu_buffer.push_back(imu_filtered);
 
-    if (en_debug) {
-      std::string write_path1 =
-          file_save_path + "acc_filtered_" + time_str + ".txt";
-      std::ofstream outfile1;
-      outfile1.open(write_path1, std::ofstream::app);
-      outfile1 << setprecision(19) << imu_filtered->header.stamp.toSec() << " "
-               << imu_filtered->linear_acceleration.x << " "
-               << imu_filtered->linear_acceleration.y << " "
-               << imu_filtered->linear_acceleration.z << " " << 0 << " " << 0
-               << " " << 0 << " " << 1 << std::endl;
-      outfile1.close();
-      std::string write_path2 =
-          file_save_path + "gyro_filtered_" + time_str + ".txt";
-      std::ofstream outfile2;
-      outfile2.open(write_path2, std::ofstream::app);
-      outfile2 << setprecision(19) << imu_filtered->header.stamp.toSec() << " "
-               << imu_filtered->angular_velocity.x << " "
-               << imu_filtered->angular_velocity.y << " "
-               << imu_filtered->angular_velocity.z << " " << 0 << " " << 0
-               << " " << 0 << " " << 1 << std::endl;
-      outfile2.close();
+      if (en_debug) {
+        std::string write_path1 =
+            file_save_path + "acc_filtered_" + time_str + ".txt";
+        std::ofstream outfile1;
+        outfile1.open(write_path1, std::ofstream::app);
+        outfile1 << setprecision(19) << imu_filtered->header.stamp.toSec()
+                 << " " << imu_filtered->linear_acceleration.x << " "
+                 << imu_filtered->linear_acceleration.y << " "
+                 << imu_filtered->linear_acceleration.z << " " << 0 << " " << 0
+                 << " " << 0 << " " << 1 << std::endl;
+        outfile1.close();
+        std::string write_path2 =
+            file_save_path + "gyro_filtered_" + time_str + ".txt";
+        std::ofstream outfile2;
+        outfile2.open(write_path2, std::ofstream::app);
+        outfile2 << setprecision(19) << imu_filtered->header.stamp.toSec()
+                 << " " << imu_filtered->angular_velocity.x << " "
+                 << imu_filtered->angular_velocity.y << " "
+                 << imu_filtered->angular_velocity.z << " " << 0 << " " << 0
+                 << " " << 0 << " " << 1 << std::endl;
+        outfile2.close();
+      }
     }
   }
+
   mtx_buffer.unlock();
   sig_buffer.notify_all();
 }
@@ -817,9 +843,17 @@ int main(int argc, char **argv) {
                            vector<double>());
   nh.param<vector<double>>("covariance/measurement/vel", cov_meas_vel,
                            vector<double>());
-  nh.param<bool>("options/en_imu_init", en_imu_init, true);
+
+  nh.param<double>("options/local_gravity", gravity, 9.79484197226504);
+  nh.param<bool>("options/en_sensor_init", en_sensor_init, true);
+  nh.param<double>("options/init_duration", init_duration, 10);
   nh.param<double>("options/imu_filter_n_sigma", imu_filter_n_sigma, 3);
   nh.param<int>("options/imu_slide_window_size", imu_slide_window_size, 10);
+  nh.param<bool>("options/en_rtk_vel", en_rtk_vel, false);
+
+  nh.param<std::string>("publish/pose_topic", pose_topic, "/fusion_pose");
+  nh.param<std::string>("publish/path_topic", path_topic, "/fusion_path");
+  nh.param<std::string>("publish/odom_topic", odom_topic, "/fusion_odom");
 
   ROS_INFO("cov_prior_pos: %f %f %f", cov_prior_pos[0], cov_prior_pos[1],
            cov_prior_pos[2]);
@@ -839,8 +873,10 @@ int main(int argc, char **argv) {
            cov_meas_pos[2]);
   ROS_INFO("cov_meas_vel: %f %f %f", cov_meas_vel[0], cov_meas_vel[1],
            cov_meas_vel[2]);
-  ROS_INFO("imu_topic: %s, gps_topic: %s", imu_topic.c_str(),
+  ROS_INFO("INPUT: imu_topic: %s, gps_topic: %s", imu_topic.c_str(),
            gps_topic.c_str());
+  ROS_INFO("OUTPUT: pose topic: %s, odom topic: %s, path topic: %s",
+           pose_topic.c_str(), odom_topic.c_str(), path_topic.c_str());
 
   path.header.stamp = ros::Time::now();
   path.header.frame_id = "camera_init";
@@ -854,10 +890,10 @@ int main(int argc, char **argv) {
   // ros::Subscriber sub_vicon = nh.subscribe(vicon_topic, 200000, vicon_cbk);
 
   ros::Publisher pubOdomAftMapped =
-      nh.advertise<nav_msgs::Odometry>("/Odometry", 100000);
-  ros::Publisher pubPath = nh.advertise<nav_msgs::Path>("/path", 100000);
+      nh.advertise<nav_msgs::Odometry>(odom_topic, 100000);
+  ros::Publisher pubPath = nh.advertise<nav_msgs::Path>(path_topic, 100000);
   ros::Publisher pubpose =
-      nh.advertise<geometry_msgs::PoseStamped>("/fusion_pose", 100000);
+      nh.advertise<geometry_msgs::PoseStamped>(pose_topic, 100000);
 
   ros::Rate rate(5000);
   bool status = ros::ok();
@@ -867,103 +903,222 @@ int main(int argc, char **argv) {
   int correct_num = 0;
   int debug_num = 0;
 
+  if (en_sensor_init) {
+    ROS_WARN("========== Sensor Initializing ...... ==========");
+  }
+
   while (status) {
     auto clock1 = std::chrono::steady_clock::now();
     ros::spinOnce();
-    while (!imu_buffer.empty() && !gps_buffer.empty()) {
-      sensor_msgs::Imu::Ptr curr_imu_data(
-          new sensor_msgs::Imu(*imu_buffer.front()));
-      // GPSGroup curr_uwb_data = uwb_buffer.front();
-      GPSGroup curr_gps_data = gps_buffer.front();
 
-      // ===============DEBUG===============
-      // std::string write_path_2 =
-      //     "/home/xng/catkin_ws/src/inno_ligo/data/res/gps_in.txt";
-      // std::ofstream outfile_2;
-      // outfile_2.open(write_path_2, std::ofstream::app);
-      // outfile_2 << debug_num << " " << curr_gps_data[1] << " "
-      //           << curr_gps_data[2] << " " << curr_gps_data[3] << " " << 0
-      //           << " " << 0 << " " << 0 << " " << 1 << std::endl;
-      // outfile_2.close();
+    double curr_init_stamp = get_stamp();
+    if (en_sensor_init) {
+      if (!is_sensor_init) {
+        if (curr_init_stamp - init_init_stamp > init_duration &&
+            imu_buffer.size() > 100) {
+          if (sensor_init(imu_buffer, acc_offset, gyr_offset)) {
+            ROS_INFO("========== Sensor Initialize DONE ==========");
+            is_sensor_init = true;
+          }
+        }
+      } else {
+        while (!imu_buffer.empty() && !gps_buffer.empty()) {
+          sensor_msgs::Imu::Ptr curr_imu_data(
+              new sensor_msgs::Imu(*imu_buffer.front()));
+          // GPSGroup curr_uwb_data = uwb_buffer.front();
+          GPSGroup curr_gps_data = gps_buffer.front();
 
-      // debug_num++;
-      // ====================================
+          // ===============DEBUG===============
+          // std::string write_path_2 =
+          //     "/home/xng/catkin_ws/src/inno_ligo/data/res/gps_in.txt";
+          // std::ofstream outfile_2;
+          // outfile_2.open(write_path_2, std::ofstream::app);
+          // outfile_2 << debug_num << " " << curr_gps_data[1] << " "
+          //           << curr_gps_data[2] << " " << curr_gps_data[3] << " " <<
+          //           0
+          //           << " " << 0 << " " << 0 << " " << 1 << std::endl;
+          // outfile_2.close();
 
-      if (!eskf_proc.flg_eskf_init && !gps_buffer.empty() &&
-          is_mag_heading_init) {
-        eskf_proc.Init(curr_imu_data, gps_buffer.front(), cov_prior_pos,
-                       cov_prior_vel, cov_prior_ori, cov_noise_gyro,
-                       cov_noise_acc, cov_meas_pos, cov_proc_gyro,
-                       cov_proc_acc);
-        if (!gps_buffer.empty()) {
-          gps_buffer.pop_front();
+          // debug_num++;
+          // ====================================
+
+          if (!eskf_proc.flg_eskf_init && !gps_buffer.empty() &&
+              is_mag_heading_init) {
+            eskf_proc.Init(curr_imu_data, gps_buffer.front(), cov_prior_pos,
+                           cov_prior_vel, cov_prior_ori, cov_noise_gyro,
+                           cov_noise_acc, cov_meas_pos, cov_proc_gyro,
+                           cov_proc_acc);
+            if (!gps_buffer.empty()) {
+              gps_buffer.pop_front();
+            }
+          }
+          if (is_mag_heading_init) {
+            if (curr_imu_data->header.stamp.toSec() < curr_gps_data.timestamp) {
+              eskf_proc.Predict(curr_imu_data);
+              imu_buffer.pop_front();
+              pred_num++;
+
+              // =========== SAVE =========== //
+              double curr_stamp = 0.0;
+              eskf_proc.GetPose(res_pos, res_quat, curr_stamp);
+              eskf_proc.GetVelocity(res_vel);
+              publish_pose(pubpose, ros::Time().fromSec(curr_stamp));
+              if (path_en)
+                publish_path(pubPath, ros::Time().fromSec(curr_stamp));
+
+              std::string write_path =
+                  file_save_path + "predict_pose_" + time_str + ".txt";
+              std::ofstream outfile;
+              outfile.open(write_path, std::ofstream::app);
+              outfile << setprecision(19) << curr_stamp << " " << res_pos[0]
+                      << " " << res_pos[1] << " " << res_pos[2] << " "
+                      << res_quat.x() << " " << res_quat.y() << " "
+                      << res_quat.z() << " " << res_quat.w() << std::endl;
+              outfile.close();
+              std::string write_path2 =
+                  file_save_path + "predict_vel_" + time_str + ".txt";
+              std::ofstream outfile2;
+              outfile2.open(write_path2, std::ofstream::app);
+              outfile2 << setprecision(19) << curr_stamp << " " << res_vel[0]
+                       << " " << res_vel[1] << " " << res_vel[2] << " " << 0
+                       << " " << 0 << " " << 0 << " " << 1 << std::endl;
+              ROS_INFO("pose: %f %f %f %f %f %f %f %f", curr_stamp, res_pos[0],
+                       res_pos[1], res_pos[2], res_quat.x(), res_quat.y(),
+                       res_quat.z(), res_quat.w());
+            } else {
+              // ROS_INFO("=====imu time: %f, gps time: %f",
+              // curr_imu_data->header.stamp.toSec(),
+              //          curr_gps_data.timestamp);
+              correct_num++;
+              eskf_proc.Predict(curr_imu_data);
+              imu_buffer.pop_front();
+              eskf_proc.Correct(curr_gps_data);
+              // uwb_buffer.pop_front();
+              if (!gps_buffer.empty()) {
+                gps_buffer.pop_front();
+              }
+
+              double curr_stamp = 0.0;
+              eskf_proc.GetPose(res_pos, res_quat, curr_stamp);
+              /******* Publish odometry *******/
+              publish_odometry(pubOdomAftMapped);
+              /******* Publish path *******/
+              if (path_en)
+                publish_path(pubPath, ros::Time().fromSec(curr_stamp));
+
+              std::string write_path =
+                  file_save_path + "fusion_pose_" + time_str + ".txt";
+              std::ofstream outfile;
+              outfile.open(write_path, std::ofstream::app);
+              outfile << setprecision(19) << curr_stamp << " " << res_pos[0]
+                      << " " << res_pos[1] << " " << res_pos[2] << " "
+                      << res_quat.x() << " " << res_quat.y() << " "
+                      << res_quat.z() << " " << res_quat.w() << std::endl;
+              outfile.close();
+              count_++;
+
+              std::cout << " pred_num: " << pred_num
+                        << "  correct_num: " << correct_num << std::endl;
+            }
+          }
         }
       }
-      if (is_mag_heading_init) {
-        if (curr_imu_data->header.stamp.toSec() < curr_gps_data.timestamp) {
-          eskf_proc.Predict(curr_imu_data);
-          imu_buffer.pop_front();
-          pred_num++;
+    } else {
+      while (!imu_buffer.empty() && !gps_buffer.empty()) {
+        sensor_msgs::Imu::Ptr curr_imu_data(
+            new sensor_msgs::Imu(*imu_buffer.front()));
+        // GPSGroup curr_uwb_data = uwb_buffer.front();
+        GPSGroup curr_gps_data = gps_buffer.front();
 
-          // =========== SAVE =========== //
-          double curr_stamp = 0.0;
-          eskf_proc.GetPose(res_pos, res_quat, curr_stamp);
-          eskf_proc.GetVelocity(res_vel);
-          publish_pose(pubpose, ros::Time().fromSec(curr_stamp));
-          if (path_en) publish_path(pubPath, ros::Time().fromSec(curr_stamp));
+        // ===============DEBUG===============
+        // std::string write_path_2 =
+        //     "/home/xng/catkin_ws/src/inno_ligo/data/res/gps_in.txt";
+        // std::ofstream outfile_2;
+        // outfile_2.open(write_path_2, std::ofstream::app);
+        // outfile_2 << debug_num << " " << curr_gps_data[1] << " "
+        //           << curr_gps_data[2] << " " << curr_gps_data[3] << " " << 0
+        //           << " " << 0 << " " << 0 << " " << 1 << std::endl;
+        // outfile_2.close();
 
-          std::string write_path =
-              file_save_path + "predict_pose_" + time_str + ".txt";
-          std::ofstream outfile;
-          outfile.open(write_path, std::ofstream::app);
-          outfile << setprecision(19) << curr_stamp << " " << res_pos[0] << " "
-                  << res_pos[1] << " " << res_pos[2] << " " << res_quat.x()
-                  << " " << res_quat.y() << " " << res_quat.z() << " "
-                  << res_quat.w() << std::endl;
-          outfile.close();
-          std::string write_path2 =
-              file_save_path + "predict_vel_" + time_str + ".txt";
-          std::ofstream outfile2;
-          outfile2.open(write_path2, std::ofstream::app);
-          outfile2 << setprecision(19) << curr_stamp << " " << res_vel[0] << " "
-                   << res_vel[1] << " " << res_vel[2] << " " << 0 << " " << 0
-                   << " " << 0 << " " << 1 << std::endl;
-          ROS_INFO("pose: %f %f %f %f %f %f %f %f", curr_stamp, res_pos[0],
-                   res_pos[1], res_pos[2], res_quat.x(), res_quat.y(),
-                   res_quat.z(), res_quat.w());
-        } else {
-          // ROS_INFO("=====imu time: %f, gps time: %f",
-          // curr_imu_data->header.stamp.toSec(),
-          //          curr_gps_data.timestamp);
-          correct_num++;
-          eskf_proc.Predict(curr_imu_data);
-          imu_buffer.pop_front();
-          eskf_proc.Correct(curr_gps_data);
-          // uwb_buffer.pop_front();
+        // debug_num++;
+        // ====================================
+
+        if (!eskf_proc.flg_eskf_init && !gps_buffer.empty() &&
+            is_mag_heading_init) {
+          eskf_proc.Init(curr_imu_data, gps_buffer.front(), cov_prior_pos,
+                         cov_prior_vel, cov_prior_ori, cov_noise_gyro,
+                         cov_noise_acc, cov_meas_pos, cov_proc_gyro,
+                         cov_proc_acc);
           if (!gps_buffer.empty()) {
             gps_buffer.pop_front();
           }
+        }
+        if (is_mag_heading_init) {
+          if (curr_imu_data->header.stamp.toSec() < curr_gps_data.timestamp) {
+            eskf_proc.Predict(curr_imu_data);
+            imu_buffer.pop_front();
+            pred_num++;
 
-          double curr_stamp = 0.0;
-          eskf_proc.GetPose(res_pos, res_quat, curr_stamp);
-          /******* Publish odometry *******/
-          publish_odometry(pubOdomAftMapped);
-          /******* Publish path *******/
-          if (path_en) publish_path(pubPath, ros::Time().fromSec(curr_stamp));
+            // =========== SAVE =========== //
+            double curr_stamp = 0.0;
+            eskf_proc.GetPose(res_pos, res_quat, curr_stamp);
+            eskf_proc.GetVelocity(res_vel);
+            publish_pose(pubpose, ros::Time().fromSec(curr_stamp));
+            if (path_en) publish_path(pubPath, ros::Time().fromSec(curr_stamp));
 
-          std::string write_path =
-              file_save_path + "fusion_pose_" + time_str + ".txt";
-          std::ofstream outfile;
-          outfile.open(write_path, std::ofstream::app);
-          outfile << setprecision(19) << curr_stamp << " " << res_pos[0] << " "
-                  << res_pos[1] << " " << res_pos[2] << " " << res_quat.x()
-                  << " " << res_quat.y() << " " << res_quat.z() << " "
-                  << res_quat.w() << std::endl;
-          outfile.close();
-          count_++;
+            std::string write_path =
+                file_save_path + "predict_pose_" + time_str + ".txt";
+            std::ofstream outfile;
+            outfile.open(write_path, std::ofstream::app);
+            outfile << setprecision(19) << curr_stamp << " " << res_pos[0]
+                    << " " << res_pos[1] << " " << res_pos[2] << " "
+                    << res_quat.x() << " " << res_quat.y() << " "
+                    << res_quat.z() << " " << res_quat.w() << std::endl;
+            outfile.close();
+            std::string write_path2 =
+                file_save_path + "predict_vel_" + time_str + ".txt";
+            std::ofstream outfile2;
+            outfile2.open(write_path2, std::ofstream::app);
+            outfile2 << setprecision(19) << curr_stamp << " " << res_vel[0]
+                     << " " << res_vel[1] << " " << res_vel[2] << " " << 0
+                     << " " << 0 << " " << 0 << " " << 1 << std::endl;
+            ROS_INFO("pose: %f %f %f %f %f %f %f %f", curr_stamp, res_pos[0],
+                     res_pos[1], res_pos[2], res_quat.x(), res_quat.y(),
+                     res_quat.z(), res_quat.w());
+          } else {
+            // ROS_INFO("=====imu time: %f, gps time: %f",
+            // curr_imu_data->header.stamp.toSec(),
+            //          curr_gps_data.timestamp);
+            correct_num++;
+            eskf_proc.Predict(curr_imu_data);
+            imu_buffer.pop_front();
+            eskf_proc.Correct(curr_gps_data);
+            // uwb_buffer.pop_front();
+            if (!gps_buffer.empty()) {
+              gps_buffer.pop_front();
+            }
 
-          std::cout << " pred_num: " << pred_num
-                    << "  correct_num: " << correct_num << std::endl;
+            double curr_stamp = 0.0;
+            eskf_proc.GetPose(res_pos, res_quat, curr_stamp);
+            /******* Publish odometry *******/
+            publish_odometry(pubOdomAftMapped);
+            /******* Publish path *******/
+            if (path_en) publish_path(pubPath, ros::Time().fromSec(curr_stamp));
+
+            std::string write_path =
+                file_save_path + "fusion_pose_" + time_str + ".txt";
+            std::ofstream outfile;
+            outfile.open(write_path, std::ofstream::app);
+            outfile << setprecision(19) << curr_stamp << " " << res_pos[0]
+                    << " " << res_pos[1] << " " << res_pos[2] << " "
+                    << res_quat.x() << " " << res_quat.y() << " "
+                    << res_quat.z() << " " << res_quat.w() << std::endl;
+            outfile.close();
+            count_++;
+
+            std::cout << " pred_num: " << pred_num
+                      << "  correct_num: " << correct_num << std::endl;
+          }
         }
       }
     }

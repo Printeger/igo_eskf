@@ -1,5 +1,5 @@
 <launch>
-	<arg name="rviz" default="true" />
+	<arg name="rviz" default="false" />
 	<arg name="en_debug" default="false" />
 
 	<rosparam command="load" file="$(find igo_eskf)/config/igo.yaml" />

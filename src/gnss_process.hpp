@@ -224,7 +224,6 @@ void GPSProcess::Process(const sensor_msgs::NavSatFix::ConstPtr &msg,
 void GPSProcess::Process(const gnss_comm::GnssPVTSolnMsg::ConstPtr &msg,
                          GPSGroup &gps_out) {
   timestamp = msg->vel_acc;
-  ROS_INFO("timestamp: %f", timestamp);
   LLA[0] = msg->latitude;
   LLA[1] = msg->longitude;
   LLA[2] = msg->altitude;

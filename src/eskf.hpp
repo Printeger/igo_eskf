@@ -228,7 +228,7 @@ bool ESKF::Init(sensor_msgs::Imu::Ptr &curr_imu_data, GPSGroup &curr_gps_,
   imu_data_buff_.clear();
   imu_data_buff_.push_back(curr_imu_data);
 
-  // flg_eskf_init = true;
+  flg_eskf_init = true;
 
   return true;
 }
@@ -296,6 +296,8 @@ bool ESKF::Predict(const sensor_msgs::Imu::Ptr &curr_imu_data) {
 bool ESKF::UpdateErrorState(double t, const Eigen::Vector3d &accel) {
   Eigen::Matrix3d F_23 = BuildSkewMatrix(accel);
 
+  F_.block<3, 3>(INDEX_STATE_POSI, INDEX_STATE_VEL) =
+      Eigen::Matrix3d::Identity();
   F_.block<3, 3>(INDEX_STATE_VEL, INDEX_STATE_ORI) = F_23;
   F_.block<3, 3>(INDEX_STATE_VEL, INDEX_STATE_ACC_BIAS) =
       pose_.block<3, 3>(0, 0);
@@ -353,11 +355,7 @@ bool ESKF::UpdateOdomEstimation() {
   ComputeAngularDelta(angular_delta);
 
   // TODO: earth rotation is not considered
-  Eigen::Vector3d w_in = Eigen::Vector3d::Zero();
-  const Eigen::Vector3d phi_in = w_in;
-  const Eigen::AngleAxisd angle_axisd(phi_in.norm(), phi_in.normalized());
-  const Eigen::Matrix3d R_nm_nm_1 = angle_axisd.toRotationMatrix().transpose();
-  std::cout << "R_nm_nm_1: " << R_nm_nm_1 << std::endl;
+  const Eigen::Matrix3d R_nm_nm_1 = Eigen::Matrix3d::Identity();
 
   Eigen::Matrix3d curr_R, last_R;
   ComputeOrientation(angular_delta, R_nm_nm_1, curr_R, last_R);
@@ -457,7 +455,7 @@ bool ESKF::ComputeOrientation(const Eigen::Vector3d &angular_delta,
   curr_R = R_nm_nm_1.transpose() * pose_.block<3, 3>(0, 0) *
            angle_axisd.toRotationMatrix();
   pose_.block<3, 3>(0, 0) = curr_R;
-
+  Eigen::Quaterniond tmp_q(curr_R);
   Eigen::Vector3d ea_ = curr_R.eulerAngles(2, 1, 0);
   // ===============DEBUG===============
   // std::string write_path_1 =
@@ -498,21 +496,18 @@ bool ESKF::ComputeVelocity(Eigen::Vector3d &curr_vel, Eigen::Vector3d &last_vel,
   last_vel = velocity_;
   velocity_ += delta_t * 0.5 * (curr_unbias_accel + last_unbias_accel);
   curr_vel = velocity_;
-  // ROS_WARN("curr_unbias_accel: %f %f %f", curr_unbias_accel[0],
-  //          curr_unbias_accel[1], curr_unbias_accel[2]);
+  ROS_WARN("curr_unbias_accel: %f %f %f", curr_unbias_accel[0],
+           curr_unbias_accel[1], curr_unbias_accel[2]);
 
   // ===============DEBUG===============
-  // std::string write_path_1 =
-  //     "/home/xng/catkin_ws/src/inno_ligo/data/res/acc_curr.txt";
-  // std::ofstream outfile_1;
-  // outfile_1.open(write_path_1, std::ofstream::app);
-  // outfile_1 << " " << curr_unbias_accel[0] << " " << curr_unbias_accel[1] <<
-  // " "
-  //           << curr_unbias_accel[2] << " " << 0 << " " << 0 << " " << 0 << "
-  //           "
-  //           << 1 << std::endl;
-  // outfile_1.close();
-  // debug_num++;
+  std::string write_path_1 =
+      "/home/xng/catkin_ws/src/inno_ligo/data/res/acc_curr.txt";
+  std::ofstream outfile_1;
+  outfile_1.open(write_path_1, std::ofstream::app);
+  outfile_1 << " " << curr_unbias_accel[0] << " " << curr_unbias_accel[1] << " "
+            << curr_unbias_accel[2] << " " << 0 << " " << 0 << " " << 0 << " "
+            << 1 << std::endl;
+  outfile_1.close();
 
   return true;
 }
@@ -542,8 +537,6 @@ void ESKF::EliminateError() {
   gyro_bias_ = gyro_bias_ - X_.block<3, 1>(INDEX_STATE_GYRO_BIAS, 0);
   accel_bias_ = accel_bias_ - X_.block<3, 1>(INDEX_STATE_ACC_BIAS, 0);
 }
-
-// Eigen::Matrix4d ESKF::GetPose() const { return pose_; }
 
 Eigen::Vector3d ESKF::GetUnbiasAccel(const Eigen::Vector3d &accel) {
   return accel - accel_bias_;

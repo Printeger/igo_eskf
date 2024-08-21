@@ -1,3 +1,5 @@
+// DONE: 1. 修正所有传感器时间戳，设置其为收到时的系统时间；
+// TODO: 2. IMU mag初始化，统计offset
 #include <Python.h>
 // #include <ikd-Tree/ikd_Tree.h>
 #include <math.h>
@@ -56,29 +58,21 @@ double curr_mag_stamp = 0.0;
 double curr_imu_stamp = 0.0;
 double last_imu_stamp = 0.0;
 
-// double gyr_cov = 0.1, acc_cov = 0.1, b_gyr_cov = 0.0001, b_acc_cov =
-// 0.0001;
-
-// double prior_cov_pos = 1.0e-4, prior_cov_vel = 1.0e-4, prior_cov_ori
-// = 1.0e-6,
-//        prior_cov_epsilon = 1.0e-6, prior_cov_delta = 1.0e-6;
-// double meas_cov_pos = 10;
-// bool flg_eskf_init = false;
-
 int iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0,
-    laserCloudValidNum = 0, count_ = 0;
+    laserCloudValidNum = 0, count_ = 0, imu_slide_window_size = 10;
 double last_timestamp_imu = -1.0, last_timestamp_gps = 0, first_gps_time = 0.0,
-       last_timestamp_uwb, gps_curr_time = 0.0;
+       last_timestamp_uwb, gps_curr_time = 0.0, imu_filter_n_sigma = 3;
 deque<double> time_buffer;
 deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
-// deque<V4D> gps_buffer;
+deque<sensor_msgs::Imu::ConstPtr> imu_window_buffer;
 deque<GPSGroup> gps_buffer;
 deque<GPSGroup> uwb_buffer;
 deque<geometry_msgs::PoseStamped> vicon_buffer;
 deque<sensor_msgs::MagneticField> mavros_mag_buffer;
 
 bool flg_first_gps = true, path_en = true, flg_EKF_inited, en_vicon = false,
-     en_debug = false, is_mag_heading_init = false;
+     en_debug = false, is_mag_heading_init = false, en_time_sync = false,
+     en_imu_init = false;
 std::string imu_topic, gps_topic, uwb_topic, vicon_topic, mag_topic,
     file_save_path;
 bool TRANSAXIS = true;
@@ -117,31 +111,32 @@ nav_msgs::Odometry odomAftMapped;
 geometry_msgs::Quaternion geoQuat;
 geometry_msgs::PoseStamped msg_body_pose;
 
+double get_stamp() {
+  auto now = std::chrono::system_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
+      now.time_since_epoch());
+  uint64_t unix_timestamp = duration.count();
+  return unix_timestamp / 1e6;
+}
+
 void format_imu(const sensor_msgs::Imu::ConstPtr &imu_in,
                 sensor_msgs::Imu::Ptr &imu_out) {
   imu_out->header.stamp = imu_in->header.stamp;
   imu_out->header.frame_id = imu_in->header.frame_id;
-  // acc_+: x: back, y: right, z: down
-  // gyro_+:x: anti-clock, y:anti-clock z: anti_clock
+  // IMU+: x: forward, y: left, z: down
   V3D acc_offset(0.0, -0.0, 0.0);
   V3D gyr_offset(-1.0 - 06, -1.446528460784526517e-06,
                  2.978023936997308257e-07);
   imu_out->linear_acceleration.x =
-      (imu_in->linear_acceleration.x - acc_offset[0]);
+      imu_in->linear_acceleration.x - acc_offset[0];
   imu_out->linear_acceleration.y =
-      (imu_in->linear_acceleration.y - acc_offset[1]);
+      imu_in->linear_acceleration.y - acc_offset[1];
   imu_out->linear_acceleration.z =
       imu_in->linear_acceleration.z - acc_offset[2];
   imu_out->angular_velocity.x = imu_in->angular_velocity.x;
   imu_out->angular_velocity.y = imu_in->angular_velocity.y;
   imu_out->angular_velocity.z = imu_in->angular_velocity.z;
-  // T265
-  // imu_out->linear_acceleration.x = imu_in->linear_acceleration.z;
-  // imu_out->linear_acceleration.y = -imu_in->linear_acceleration.x;
-  // imu_out->linear_acceleration.z = -imu_in->linear_acceleration.y;
-  // imu_out->angular_velocity.x = imu_in->angular_velocity.z * degree2rad;
-  // imu_out->angular_velocity.y = -imu_in->angular_velocity.x * degree2rad;
-  // imu_out->angular_velocity.z = -imu_in->angular_velocity.y * degree2rad;
+
   if (en_debug) {
     cnt_imu++;
     sum_acc +=
@@ -229,16 +224,24 @@ bool sync_mag_gps() {
   }
 
   if (!is_mag_heading_init) {
+    // mag: N0, E90 --> N90, E0
     init_mag_heading =
-        atan2(closest_mag.magnetic_field.y, closest_mag.magnetic_field.x);
+        -atan2(closest_mag.magnetic_field.y, closest_mag.magnetic_field.x) +
+        M_PI / 2;
+    if (init_mag_heading > M_PI) {
+      init_mag_heading -= 2 * M_PI;
+    }
+    if (init_mag_heading < -M_PI) {
+      init_mag_heading += 2 * M_PI;
+    }
     curr_heading_angle = init_mag_heading;
     last_mag_heading = init_mag_heading;
     last_mag_stamp = closest_mag.header.stamp.toSec();
     is_mag_heading_init = true;
   } else {
     curr_heading_angle =
-        atan2(closest_mag.magnetic_field.y, closest_mag.magnetic_field.x) -
-        init_mag_heading;
+        -atan2(closest_mag.magnetic_field.y, closest_mag.magnetic_field.x) +
+        M_PI / 2;
     if (curr_heading_angle > M_PI) {
       curr_heading_angle -= 2 * M_PI;
     }
@@ -251,7 +254,7 @@ bool sync_mag_gps() {
     std::ofstream outfile;
     outfile.open(write_path, std::ofstream::app);
     outfile << setprecision(19) << closest_mag.header.stamp.toSec() << " "
-            << curr_heading_angle << " " << curr_heading_angle << " "
+            << init_mag_heading << " " << curr_heading_angle << " "
             << curr_heading_angle << " " << 0 << " " << 0 << " " << 0 << " "
             << 1 << std::endl;
     outfile.close();
@@ -263,109 +266,163 @@ bool sync_mag_gps() {
   gps_buffer.front().magnetic =
       V3D(init_mag_heading, 0.0, curr_heading_vel);  // TODO: ENU
 
-  // Rotate GPS UTM by curr_heading_angle around the z-axis
-  double cos_angle = cos(curr_heading_angle);
-  double sin_angle = sin(curr_heading_angle);
-  double x = gps_buffer.front().UTM[0];
-  double y = gps_buffer.front().UTM[1];
-  gps_buffer.front().UTM[0] = x * cos_angle - y * sin_angle;
-  gps_buffer.front().UTM[1] = x * sin_angle + y * cos_angle;
+  // Rotate GPS UTM by init_mag_heading around the z-axis
+  double cos_angle = cos(init_mag_heading);
+  double sin_angle = sin(init_mag_heading);
+
+  for (auto &gps : gps_buffer) {
+    double x = gps.UTM[0];
+    double y = gps.UTM[1];
+    gps.UTM[0] = x * cos_angle - y * sin_angle;
+    gps.UTM[1] = x * sin_angle + y * cos_angle;
+
+    if (en_debug) {
+      std::string write_path =
+          file_save_path + "transed_utm_" + time_str + ".txt";
+      std::ofstream outfile;
+      outfile.open(write_path, std::ofstream::app);
+      outfile << setprecision(19) << gps.timestamp << " " << gps.UTM[0] << " "
+              << gps.UTM[1] << " " << gps.UTM[2] << " " << 0 << " " << 0 << " "
+              << 0 << " " << 1 << std::endl;
+      outfile.close();
+    }
+  }
 
   return true;
 }
 
-// void smoothImuData() {
-//   // Check if there are enough IMU measurements in the buffer
-//   if (imu_buffer.size() < WINDOW_SIZE) {
-//     return;
-//   }
+sensor_msgs::Imu::Ptr slidingWindowFilter(
+    deque<sensor_msgs::Imu::ConstPtr> &imu_buffer_window, const int WINDOW_SIZE,
+    const double OUTLIER_THRESHOLD) {
+  // Initialize variables for the sliding window and mean values
+  V3D mean_acc(Zero3d);
+  V3D mean_gyr(Zero3d);
+  double mean_stamp = 0.0;
+  // Remove the highest and lowest IMU measurements before calculate the mean
+  // acceleration and angular velocity over the window
 
-//   // Initialize variables for smoothed acceleration and angular velocity
-//   V3D smoothed_acc(Zero3d);
-//   V3D smoothed_gyr(Zero3d);
+  for (const auto &imu : imu_buffer_window) {
+    mean_acc += V3D(imu->linear_acceleration.x, imu->linear_acceleration.y,
+                    imu->linear_acceleration.z);
+    mean_gyr += V3D(imu->angular_velocity.x, imu->angular_velocity.y,
+                    imu->angular_velocity.z);
+    mean_stamp += imu->header.stamp.toSec();
+  }
+  mean_acc /= WINDOW_SIZE;
+  mean_gyr /= WINDOW_SIZE;
+  mean_stamp /= WINDOW_SIZE;
+  // Calculate the standard deviation of acceleration and angular velocity
+  V3D std_acc(Zero3d);
+  V3D std_gyr(Zero3d);
+  for (const auto &imu : imu_buffer_window) {
+    const V3D acc_diff =
+        V3D(imu->linear_acceleration.x, imu->linear_acceleration.y,
+            imu->linear_acceleration.z) -
+        mean_acc;
+    const V3D gyr_diff = V3D(imu->angular_velocity.x, imu->angular_velocity.y,
+                             imu->angular_velocity.z) -
+                         mean_gyr;
+    std_acc += acc_diff.cwiseProduct(acc_diff);
+    std_gyr += gyr_diff.cwiseProduct(gyr_diff);
+  }
+  std_acc = std_acc.cwiseSqrt() / WINDOW_SIZE;
+  std_gyr = std_gyr.cwiseSqrt() / WINDOW_SIZE;
+  // Remove outliers from the window buffer
+  deque<sensor_msgs::Imu::ConstPtr> filtered_buffer_;
+  std::pair<std::deque<sensor_msgs::Imu::ConstPtr>::iterator, double>
+      max_acc_diff = std::make_pair(imu_buffer_window.begin(), 0.0);
+  std::pair<std::deque<sensor_msgs::Imu::ConstPtr>::iterator, double>
+      max_gyr_diff = std::make_pair(imu_buffer_window.begin(), 0.0);
+  for (auto it = imu_buffer_window.begin(); it != imu_buffer_window.end();) {
+    const auto &imu = *it;
+    const V3D acc_diff =
+        V3D(imu->linear_acceleration.x, imu->linear_acceleration.y,
+            imu->linear_acceleration.z) -
+        mean_acc;
+    const V3D gyr_diff = V3D(imu->angular_velocity.x, imu->angular_velocity.y,
+                             imu->angular_velocity.z) -
+                         mean_gyr;
+    const double acc_norm = acc_diff.norm();
+    const double gyr_norm = gyr_diff.norm();
+    if (acc_norm > max_acc_diff.second) {
+      max_acc_diff = std::make_pair(it, acc_norm);
+    }
+    if (gyr_norm > max_gyr_diff.second) {
+      max_gyr_diff = std::make_pair(it, gyr_norm);
+    }
+    // Check if the current IMU measurement is an outlier
+    if (acc_norm < OUTLIER_THRESHOLD * std_acc.norm() &&
+        gyr_norm < OUTLIER_THRESHOLD * std_gyr.norm()) {
+      filtered_buffer_.push_back(imu);
+    }
+    ++it;
+  }
 
-//   // Calculate the average acceleration and angular velocity over the window
-//   for (const auto &imu_msg : imu_buffer) {
-//     smoothed_acc +=
-//         V3D(imu_msg->linear_acceleration.x, imu_msg->linear_acceleration.y,
-//             imu_msg->linear_acceleration.z);
-//     smoothed_gyr +=
-//         V3D(imu_msg->angular_velocity.x, imu_msg->angular_velocity.y,
-//             imu_msg->angular_velocity.z);
-//   }
-//   smoothed_acc /= WINDOW_SIZE;
-//   smoothed_gyr /= WINDOW_SIZE;
+  if (filtered_buffer_.size() == 0) {
+    if (max_acc_diff.first == max_gyr_diff.first) {
+      imu_buffer_window.erase(max_acc_diff.first);
+    } else if (max_acc_diff.first < max_gyr_diff.first) {
+      imu_buffer_window.erase(max_gyr_diff.first);
+      imu_buffer_window.erase(max_acc_diff.first);
+    } else {
+      imu_buffer_window.erase(max_acc_diff.first);
+      imu_buffer_window.erase(max_gyr_diff.first);
+    }
+    V3D mean_acc(Zero3d);
+    V3D mean_gyr(Zero3d);
+    double mean_stamp = 0.0;
+    for (const auto &imu : imu_buffer_window) {
+      mean_acc += V3D(imu->linear_acceleration.x, imu->linear_acceleration.y,
+                      imu->linear_acceleration.z);
+      mean_gyr += V3D(imu->angular_velocity.x, imu->angular_velocity.y,
+                      imu->angular_velocity.z);
+      mean_stamp += imu->header.stamp.toSec();
+    }
+    mean_acc /= imu_buffer_window.size();
+    mean_gyr /= imu_buffer_window.size();
+    mean_stamp /= imu_buffer_window.size();
+    sensor_msgs::Imu::Ptr imu_out(new sensor_msgs::Imu());
+    imu_out->header.stamp = ros::Time().fromSec(mean_stamp);
+    imu_out->header.frame_id = imu_buffer_window.back()->header.frame_id;
+    imu_out->linear_acceleration.x = mean_acc[0];
+    imu_out->linear_acceleration.y = mean_acc[1];
+    imu_out->linear_acceleration.z = mean_acc[2];
+    imu_out->angular_velocity.x = mean_gyr[0];
+    imu_out->angular_velocity.y = mean_gyr[1];
+    imu_out->angular_velocity.z = mean_gyr[2];
+    // Clear the window buffer for the next window
+    imu_buffer_window.clear();
 
-//   // Update the IMU measurements in the buffer with the smoothed values
-//   for (auto &imu_msg : imu_buffer) {
-//     imu_msg->linear_acceleration.x = smoothed_acc[0];
-//     imu_msg->linear_acceleration.y = smoothed_acc[1];
-//     imu_msg->linear_acceleration.z = smoothed_acc[2];
-//     imu_msg->angular_velocity.x = smoothed_gyr[0];
-//     imu_msg->angular_velocity.y = smoothed_gyr[1];
-//     imu_msg->angular_velocity.z = smoothed_gyr[2];
-//   }
-// }
+    return imu_out;
+  } else {
+    // Calculate the mean acceleration and angular velocity after removing
+    // outliers
+    V3D f_mean_acc = Zero3d;
+    V3D f_mean_gyr = Zero3d;
+    double f_mean_stamp = 0.0;
+    for (const auto &imu : filtered_buffer_) {
+      f_mean_acc += V3D(imu->linear_acceleration.x, imu->linear_acceleration.y,
+                        imu->linear_acceleration.z);
+      f_mean_gyr += V3D(imu->angular_velocity.x, imu->angular_velocity.y,
+                        imu->angular_velocity.z);
+      f_mean_stamp += imu->header.stamp.toSec();
+    }
+    f_mean_acc /= filtered_buffer_.size();
+    f_mean_gyr /= filtered_buffer_.size();
+    f_mean_stamp /= filtered_buffer_.size();
+    sensor_msgs::Imu::Ptr imu_out(new sensor_msgs::Imu());
+    imu_out->header.stamp = ros::Time().fromSec(f_mean_stamp);
+    imu_out->header.frame_id = filtered_buffer_.back()->header.frame_id;
+    imu_out->linear_acceleration.x = f_mean_acc[0];
+    imu_out->linear_acceleration.y = f_mean_acc[1];
+    imu_out->linear_acceleration.z = f_mean_acc[2];
+    imu_out->angular_velocity.x = f_mean_gyr[0];
+    imu_out->angular_velocity.y = f_mean_gyr[1];
+    imu_out->angular_velocity.z = f_mean_gyr[2];
+    // Clear the window buffer for the next window
+    imu_buffer_window.clear();
 
-void NED2ENU(const sensor_msgs::Imu::ConstPtr &imu_in,
-             sensor_msgs::Imu::Ptr &imu_out) {
-  double time_diff_gps_imu = 10.0;
-  imu_out->header.stamp =
-      imu_in->header.stamp + ros::Duration(time_diff_gps_imu);
-  // static stable 0808
-  imu_out->header.frame_id = imu_in->header.frame_id;
-  imu_out->linear_acceleration.x = imu_in->linear_acceleration.x;
-  imu_out->linear_acceleration.y = -imu_in->linear_acceleration.y;
-  imu_out->linear_acceleration.z = -imu_in->linear_acceleration.z;
-  // rad/s
-  imu_out->angular_velocity.x = imu_in->angular_velocity.x * degree2rad;
-  imu_out->angular_velocity.y = imu_in->angular_velocity.y * degree2rad;
-  imu_out->angular_velocity.z = imu_in->angular_velocity.z * degree2rad;
-  // TODO: TEST
-  // V3D acc_offset(-0.1069723210427511173, 0.1317078687453833996,
-  // -0.0326215262); V3D
-  // gyr_offset(0.0002170503748205379331, 2.706704711055054452e-05,
-  //                -0.002261991278184427839);
-  // imu_out->header.frame_id = imu_in->header.frame_id;
-  // imu_out->linear_acceleration.x =
-  //     -(imu_in->linear_acceleration.x - acc_offset[0]);
-  // imu_out->linear_acceleration.y =
-  //     (imu_in->linear_acceleration.y - acc_offset[1]);
-  // imu_out->linear_acceleration.z =
-  //     -(imu_in->linear_acceleration.z - acc_offset[2]);
-  // // rad/s
-  // imu_out->angular_velocity.x =
-  //     (imu_in->angular_velocity.x - gyr_offset[0]) * degree2rad;
-  // imu_out->angular_velocity.y =
-  //     -(imu_in->angular_velocity.y - gyr_offset[1]) * degree2rad;
-  // imu_out->angular_velocity.z =
-  //     -(imu_in->angular_velocity.z - gyr_offset[2]) * degree2rad;
-
-  if (en_debug) {
-    cnt_imu++;
-    sum_acc += V3D(imu_in->linear_acceleration.x, imu_in->linear_acceleration.y,
-                   imu_in->linear_acceleration.z);
-    sum_gyr += V3D(imu_in->angular_velocity.x, imu_in->angular_velocity.y,
-                   imu_in->angular_velocity.z);
-    mean_acc = sum_acc / cnt_imu;
-    mean_gyr = sum_gyr / cnt_imu;
-    std::string write_path1 = file_save_path + "acc_in_" + time_str + ".txt";
-    std::ofstream outfile1;
-    outfile1.open(write_path1, std::ofstream::app);
-    outfile1 << setprecision(19) << imu_in->header.stamp.toSec() << " "
-             << imu_in->linear_acceleration.x << " "
-             << imu_in->linear_acceleration.y << " "
-             << imu_in->linear_acceleration.z << " " << mean_acc[0] << " "
-             << mean_acc[1] << " " << mean_acc[2] << " " << 1 << std::endl;
-    outfile1.close();
-    std::string write_path2 = file_save_path + "gyro_in" + time_str + ".txt";
-    std::ofstream outfile2;
-    outfile2.open(write_path2, std::ofstream::app);
-    outfile2 << setprecision(19) << imu_in->header.stamp.toSec() << " "
-             << imu_in->angular_velocity.x << " " << imu_in->angular_velocity.y
-             << " " << imu_in->angular_velocity.z << " " << mean_gyr[0] << " "
-             << mean_gyr[1] << " " << mean_gyr[2] << " " << 1 << std::endl;
-    outfile2.close();
+    return imu_out;
   }
 }
 
@@ -468,16 +525,18 @@ void gps_cbk(const sensor_msgs::NavSatFix::ConstPtr &gps_msg) {
 }
 
 void gps_cbk_vel(const gnss_comm::GnssPVTSolnMsg::ConstPtr &gps_msg) {
-  ROS_WARN("gps_cbk");
   gnss_comm::GnssPVTSolnMsg::Ptr msg(new gnss_comm::GnssPVTSolnMsg(*gps_msg));
-  uint64_t recv_stamp = convertGpsToUnix(msg->time.week, msg->time.tow);
-
-  ROS_INFO("recv_stamp: %ld, msg->time.week: %ld,  msg->time.tow: %ld",
-           recv_stamp, msg->time.week, msg->time.tow);
-  double timestamp =
-      static_cast<double>(recv_stamp);  // diff between imu and gps
-  msg->vel_acc = timestamp;             // using vel_acc to store timestamp
-
+  double timestamp = 0.0;
+  if (en_time_sync) {
+    double timestamp = get_stamp();
+    msg->vel_acc = timestamp;
+  } else {
+    uint64_t recv_stamp = convertGpsToUnix(msg->time.week, msg->time.tow);
+    // ROS_INFO("recv_stamp: %ld, msg->time.week: %ld,  msg->time.tow: %ld",
+    //          recv_stamp, msg->time.week, msg->time.tow);
+    timestamp = static_cast<double>(recv_stamp);  // diff between imu and gps
+    msg->vel_acc = timestamp;  // using vel_acc to store timestamp
+  }
   mtx_buffer.lock();
 
   if (timestamp < last_timestamp_gps) {
@@ -513,111 +572,74 @@ void gps_cbk_vel(const gnss_comm::GnssPVTSolnMsg::ConstPtr &gps_msg) {
   time_buffer.push_back(timestamp);
   gps_buffer.push_back(temp_utm);
   if (!sync_mag_gps()) {
-    ROS_WARN("sync_mag_gps failed");
+    ROS_WARN("sync mag & gps failed");
   }
   mtx_buffer.unlock();
   sig_buffer.notify_all();
 }
 
 void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in) {
-  sensor_msgs::Imu::Ptr msg(new sensor_msgs::Imu(*msg_in));
-  double timestamp = msg->header.stamp.toSec();
+  sensor_msgs::Imu::Ptr tmp_msg(new sensor_msgs::Imu(*msg_in));
+  if (en_time_sync) {
+    double local_stamp = get_stamp();
+    tmp_msg->header.stamp = ros::Time().fromSec(local_stamp);
+  }
+
   mtx_buffer.lock();
-  // ======= DEBUG ======= //
-  // std::string write_path_1 =
-  // "/home/mint/ws_fusion_uwb/src/inno_ligo/data/res/acc_in.txt"; std::ofstream
-  // outfile_1; outfile_1.open(write_path_1, std::ofstream::app); outfile_1 <<
-  // setprecision(19) << msg->header.stamp.toSec() << " " <<
-  // msg->linear_acceleration.x << " "
-  //           << msg->linear_acceleration.y << " " <<
-  //           msg->linear_acceleration.z << " " << 0 << " " << 0 << " " << 0
-  //           << " " << 1 << std::endl;
-  // outfile_1.close();
-
-  // double av_1 = msg->angular_velocity.x * rad2degree;
-  // double av_2 = msg->angular_velocity.y * rad2degree;
-  // double av_3 = msg->angular_velocity.z * rad2degree;
-  // std::string write_path_2 =
-  // "/home/mint/ws_fusion_uwb/src/inno_ligo/data/res/gyro_in.txt";
-  // std::ofstream outfile_2;
-  // outfile_2.open(write_path_2, std::ofstream::app);
-  // outfile_2 << setprecision(19) << msg->header.stamp.toSec() << " " << av_1
-  // << " " << av_2 << " " << av_3 << " " <<
-  // 0
-  //           << " " << 0 << " " << 0 << " " << 1 << std::endl;
-  // outfile_2.close();
-
+  double timestamp = tmp_msg->header.stamp.toSec();
   if (timestamp < last_timestamp_imu) {
     ROS_WARN("imu loop back, clear buffer");
     imu_buffer.clear();
   }
   last_timestamp_imu = timestamp;
-  sensor_msgs::Imu::Ptr temp_imu(new sensor_msgs::Imu(*msg_in));
-  if (0) {
-    NED2ENU(msg_in, temp_imu);
-  } else {
-    format_imu(msg, temp_imu);
+  sensor_msgs::Imu::Ptr temp_imu(new sensor_msgs::Imu(*tmp_msg));
+  format_imu(tmp_msg, temp_imu);
+
+  imu_window_buffer.push_back(temp_imu);
+  if (imu_window_buffer.size() >= imu_slide_window_size) {
+    sensor_msgs::Imu::Ptr imu_filtered = slidingWindowFilter(
+        imu_window_buffer, imu_slide_window_size, imu_filter_n_sigma);
+    imu_buffer.push_back(imu_filtered);
+
+    if (en_debug) {
+      std::string write_path1 =
+          file_save_path + "acc_filtered_" + time_str + ".txt";
+      std::ofstream outfile1;
+      outfile1.open(write_path1, std::ofstream::app);
+      outfile1 << setprecision(19) << imu_filtered->header.stamp.toSec() << " "
+               << imu_filtered->linear_acceleration.x << " "
+               << imu_filtered->linear_acceleration.y << " "
+               << imu_filtered->linear_acceleration.z << " " << 0 << " " << 0
+               << " " << 0 << " " << 1 << std::endl;
+      outfile1.close();
+      std::string write_path2 =
+          file_save_path + "gyro_filtered_" + time_str + ".txt";
+      std::ofstream outfile2;
+      outfile2.open(write_path2, std::ofstream::app);
+      outfile2 << setprecision(19) << imu_filtered->header.stamp.toSec() << " "
+               << imu_filtered->angular_velocity.x << " "
+               << imu_filtered->angular_velocity.y << " "
+               << imu_filtered->angular_velocity.z << " " << 0 << " " << 0
+               << " " << 0 << " " << 1 << std::endl;
+      outfile2.close();
+    }
   }
-  // curr_imu_stamp = temp_imu.header.stamp.toSec();// TODO: 0808 slide window
-  // last_imu_stamp = temp_imu.header.stamp.toSec();
-  // // Process IMUs in 50ms duration
-  // if (time_buffer.size() >= 2) {
-  //   double start_time = time_buffer.front();
-  //   double end_time = time_buffer.back();
-  //   if (end_time - start_time >= 0.05) {
-  //     // Process IMUs in the 50ms duration
-  //     std::vector<sensor_msgs::Imu::Ptr> imu_measurements;
-  //     while (!imu_buffer.empty()) {
-  //       double imu_timestamp = imu_buffer.front()->header.stamp.toSec();
-  //       if (imu_timestamp >= start_time && imu_timestamp <= end_time) {
-  //         imu_measurements.push_back(imu_buffer.front());
-  //         imu_buffer.pop_front();
-  //       } else {
-  //         break;
-  //       }
-  //     }
-
-  //     // Process the IMU measurements
-  //     process_imu_measurements(imu_measurements);
-  //   }
-  // }
-
-  imu_buffer.push_back(temp_imu);
   mtx_buffer.unlock();
   sig_buffer.notify_all();
 }
 
-// pixhawk mag: NED, Xsens: SWD
+double sum_heading = 0;
+int cnt_ = 0;
+// pixhawk mag: NED, N-0, E-90, Xsens: SWD
 void mavros_mag_cbk(const sensor_msgs::MagneticField::ConstPtr &msg) {
   mtx_buffer.lock();
   sensor_msgs::MagneticField tmp_msg = *msg;
-  double time_diff_gps_mag = 8.5;
-  ros::Time new_stamp = tmp_msg.header.stamp + ros::Duration(time_diff_gps_mag);
-  tmp_msg.header.stamp = new_stamp;
-
+  if (en_time_sync) {
+    double local_stamp = get_stamp();
+    tmp_msg.header.stamp = ros::Time().fromSec(local_stamp);
+  }
   mavros_mag_buffer.push_back(tmp_msg);
   mtx_buffer.unlock();
-
-  // double curr_heading_angle = atan2(tmp_msg.vector.y,
-  // tmp_msg.vector.x) - init_mag_heading; if (curr_heading_angle >
-  // M_PI) {
-  //   curr_heading_angle -= 2 * M_PI;
-  // }
-  // if (curr_heading_angle < -M_PI) {
-  //   curr_heading_angle += 2 * M_PI;
-  // }
-  // sum_heading += curr_heading_angle;
-  // cnt_++;
-  // double mean_heading = sum_heading / cnt_;
-  // std::string write_path = file_save_path + "mavros_" + time_str + ".txt";
-  // std::ofstream outfile;
-  // outfile.open(write_path, std::ofstream::app);
-  // outfile << setprecision(19) << tmp_msg.header.stamp.toSec() << " " <<
-  // curr_heading_angle << " " << mean_heading
-  //         << " "
-  //         << mean_heading << " " << 0 << " " << 0 << " " << 0 << " " << 1 <<
-  //         std::endl;
-  // // outfile.close();
 }
 
 // 离GPS时间点最近的IMU数据从缓存队列中取出，进行时间对齐，并保存到meas中
@@ -773,6 +795,7 @@ int main(int argc, char **argv) {
 
   nh.param<bool>("common/en_vicon", en_vicon, false);
   nh.param<bool>("common/en_debug", en_debug, false);
+  nh.param<bool>("common/en_time_sync", en_time_sync, true);
 
   nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
   nh.param<vector<double>>("mapping/extrinsic_R", extrinR, vector<double>());
@@ -794,6 +817,9 @@ int main(int argc, char **argv) {
                            vector<double>());
   nh.param<vector<double>>("covariance/measurement/vel", cov_meas_vel,
                            vector<double>());
+  nh.param<bool>("options/en_imu_init", en_imu_init, true);
+  nh.param<double>("options/imu_filter_n_sigma", imu_filter_n_sigma, 3);
+  nh.param<int>("options/imu_slide_window_size", imu_slide_window_size, 10);
 
   ROS_INFO("cov_prior_pos: %f %f %f", cov_prior_pos[0], cov_prior_pos[1],
            cov_prior_pos[2]);
@@ -844,7 +870,6 @@ int main(int argc, char **argv) {
   while (status) {
     auto clock1 = std::chrono::steady_clock::now();
     ros::spinOnce();
-    //* 3. 对齐传感器输入，存入Measures，
     while (!imu_buffer.empty() && !gps_buffer.empty()) {
       sensor_msgs::Imu::Ptr curr_imu_data(
           new sensor_msgs::Imu(*imu_buffer.front()));
@@ -876,9 +901,6 @@ int main(int argc, char **argv) {
       }
       if (is_mag_heading_init) {
         if (curr_imu_data->header.stamp.toSec() < curr_gps_data.timestamp) {
-          // ROS_INFO("*****imu time: %f, gps time: %f",
-          // curr_imu_data->header.stamp.toSec(),
-          //          curr_gps_data.timestamp);
           eskf_proc.Predict(curr_imu_data);
           imu_buffer.pop_front();
           pred_num++;

@@ -8,9 +8,7 @@ common:
     file_save_path: "/home/mint/ws_fusion_uwb/src/igo_eskf/data/"
     en_vicon: true
     en_debug: true
-    time_sync_en: false         # ONLY turn on when external time synchronization is really not possible
-    time_offset_lidar_to_imu: 0.0 # Time offset between lidar and IMU calibrated by other algorithms, e.g. LI-Init (can be found in README).
-                                  # This param will take effect no matter what time_sync_en is. So if the time offset is not known exactly, please set as 0.0
+    en_time_sync: true         # ONLY turn on when external time synchronization is really not possible
 
 covariance:
     noise:
@@ -20,14 +18,16 @@ covariance:
         gyro: [1.0e-6, 1.0e-6, 1.0e-6]
         acc: [1.0e-6, 1.0e-6, 1.0e-6]
     process:
-        gyro: [1.0e-3, 1.0e-3, 1.0e-3]
-        accel: [1.0e-3, 1.0e-3, 1.0e-3]
+        gyro: [1.0e-1, 1.0e-1, 1.0e-1]
+        accel: [1.0e-1, 1.0e-1, 1.0e-1]
     measurement:
         posi: [1.0e-3, 1.0e-3, 1.0e-3]
         vel: [1.0e-3, 1.0e-3, 1.0e-3]
 
-
-
+options:
+    en_imu_init: true
+    imu_filter_n_sigma: 1
+    imu_slide_window_size: 10
         
 mapping:
     acc_cov: 0.1

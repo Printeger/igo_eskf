@@ -4,17 +4,17 @@
 #include "../include/common_lib.h"
 #include "../include/sophus/se3.hpp"
 
+// class ESKF_Base {
+//  public:
+//   virtual void Init() = 0;
+//   virtual ~ESKF_Base() = default;
+// };
+
 class ESKF {
  public:
   ESKF() {};
   ~ESKF() {};
 
-  bool Init(
-      sensor_msgs::Imu::Ptr &curr_imu_data, const vector<double> &cov_prior_pos,
-      const vector<double> &cov_prior_vel, const vector<double> &cov_prior_ori,
-      const vector<double> &cov_prior_epsilon,
-      const vector<double> &cov_prior_delta, const vector<double> &cov_meas_pos,
-      const vector<double> &cov_proc_gyro, const vector<double> &cov_proc_acc);
   bool Init(sensor_msgs::Imu::Ptr &curr_imu_data, GPSGroup &curr_gps_,
             const vector<double> &cov_prior_pos,
             const vector<double> &cov_prior_vel,
@@ -22,6 +22,7 @@ class ESKF {
             const vector<double> &cov_prior_epsilon,
             const vector<double> &cov_prior_delta,
             const vector<double> &cov_meas_pos,
+            const vector<double> &cov_meas_vel,
             const vector<double> &cov_proc_gyro,
             const vector<double> &cov_proc_acc);
 
@@ -122,16 +123,16 @@ class ESKF {
 
  public:
   void GetFGY(TypeMatrixF &F, TypeMatrixG &G, TypeVectorY &Y);
+  Eigen::Matrix3d BuildSkewMatrix(const Eigen::Vector3d &vec);
   int count_debug = 0;
+  double kDegree2Radian = M_PI / 180.0;
 
   double earth_rotation_speed = 7.272205216e-05;
   double gravity = 9.79484197226504;
   bool flg_eskf_init = false;
 };
 
-constexpr double kDegree2Radian = M_PI / 180.0;
-
-Eigen::Matrix3d BuildSkewMatrix(const Eigen::Vector3d &vec) {
+Eigen::Matrix3d ESKF::BuildSkewMatrix(const Eigen::Vector3d &vec) {
   Eigen::Matrix3d matrix;
   matrix << 0.0, -vec[2], vec[1], vec[2], 0.0, -vec[0], -vec[1], vec[0], 0.0;
 
@@ -196,6 +197,7 @@ bool ESKF::Init(sensor_msgs::Imu::Ptr &curr_imu_data, GPSGroup &curr_gps_,
                 const vector<double> &cov_prior_epsilon,
                 const vector<double> &cov_prior_delta,
                 const vector<double> &cov_meas_pos,
+                const vector<double> &cov_meas_vel,
                 const vector<double> &cov_proc_gyro,
                 const vector<double> &cov_proc_acc) {
   g_ = Eigen::Vector3d(0.0, 0.0, gravity);

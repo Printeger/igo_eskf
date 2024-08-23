@@ -1,6 +1,5 @@
 #include <common_lib.h>
 // #include <proj_api.h>
-#include <common_msgs/LinktrackNodeframe2.h>
 #include <sensor_msgs/NavSatFix.h>
 
 #include <GeographicLib/LocalCartesian.hpp>
@@ -88,8 +87,6 @@ class GPSProcess {
   void Process(const sensor_msgs::NavSatFix::ConstPtr &msg, GPSGroup &gps_out);
   void Process(const gnss_comm::GnssPVTSolnMsg::ConstPtr &msg,
                GPSGroup &gps_out);
-  void uwb_process(const common_msgs::LinktrackNodeframe2::ConstPtr &msg,
-                   GPSGroup &gps_out);
 
   GeographicLib::LocalCartesian geo_converter;
   sensor_msgs::NavSatFixPtr last_gps_;
@@ -235,18 +232,4 @@ void GPSProcess::Process(const gnss_comm::GnssPVTSolnMsg::ConstPtr &msg,
   gps_out.velocity = ECEF2ENU(vel_ecef, LLA[0], LLA[1]);
   // gps_out.velocity = V3D(msg->vel_e, msg->vel_n, -msg->vel_d);
   // gps_out = V4D(timestamp, UTM[0], UTM[1], UTM[2]);
-}
-
-void GPSProcess::uwb_process(
-    const common_msgs::LinktrackNodeframe2::ConstPtr &msg, GPSGroup &gps_out) {
-  timestamp = msg->local_time * 1e-6;
-  LLA[0] = msg->pos_3d.at(0) - lon_0;
-  LLA[1] = msg->pos_3d.at(1) - lat_0;
-  LLA[2] = msg->pos_3d.at(2) - alti_0;
-  UTM[0] = msg->pos_3d.at(0) - lon_0;
-  UTM[1] = msg->pos_3d.at(1) - lat_0;
-  UTM[2] = msg->pos_3d.at(2) - alti_0;
-  gps_out.timestamp = timestamp;
-  gps_out.LLA = LLA;
-  gps_out.UTM = UTM;
 }

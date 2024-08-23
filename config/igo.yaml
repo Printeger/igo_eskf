@@ -29,7 +29,7 @@ options:
     en_sensor_init: true
     init_duration: 10 # seconds
     imu_filter_n_sigma: 1
-    imu_slide_window_size: 10
+    imu_slide_window_size: 5
     en_rtk_vel: false
         
 publish:

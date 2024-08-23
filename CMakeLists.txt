@@ -4,7 +4,6 @@ project(igo_eskf)
 SET(CMAKE_BUILD_TYPE "Release")
 
 ADD_COMPILE_OPTIONS(-std=c++14 )
-ADD_COMPILE_OPTIONS(-std=c++14 )
 set( CMAKE_CXX_FLAGS "-std=c++14 -O3" )
 
 add_definitions(-DROOT_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/\")
@@ -53,7 +52,7 @@ find_package(catkin REQUIRED COMPONENTS
   tf
   message_generation
   eigen_conversions
-  common_msgs
+  # common_msgs
   gnss_comm
 )
 
@@ -86,11 +85,11 @@ generate_messages(
  geometry_msgs
  std_msgs
  sensor_msgs
- common_msgs
+#  common_msgs
 )
 
 catkin_package(
-  CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs message_runtime common_msgs
+  CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs message_runtime 
   DEPENDS EIGEN3 PCL
   INCLUDE_DIRS
 )

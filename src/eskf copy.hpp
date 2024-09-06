@@ -3,7 +3,6 @@
 
 #include "../include/common_lib.h"
 #include "../include/sophus/se3.hpp"
-#include "sophus/so3.hpp"
 
 // class ESKF_Base {
 //  public:
@@ -61,23 +60,17 @@ class ESKF {
   void ResetState();
 
  private:
-  // pos, vel, ori, gyro_bias, accel_bias, gravity_bias
-  static const unsigned int DIM_STATE_ = 18;
+  static const unsigned int DIM_STATE_ = 15;
   static const unsigned int DIM_STATE_NOISE = 6;
-  // 3D position, 3D velocity, 3D orientation
-  static const unsigned int DIM_MEASUREMENT = 9;
-  static const unsigned int DIM_MEASUREMENT_NOISE = 9;
+  static const unsigned int DIM_MEASUREMENT = 3;
+  static const unsigned int DIM_MEASUREMENT_NOISE = 3;
 
   static const unsigned int INDEX_STATE_POSI = 0;
   static const unsigned int INDEX_STATE_VEL = 3;
   static const unsigned int INDEX_STATE_ORI = 6;
   static const unsigned int INDEX_STATE_GYRO_BIAS = 9;
   static const unsigned int INDEX_STATE_ACC_BIAS = 12;
-  static const unsigned int INDEX_STATE_G_BIAS = 15;
-
   static const unsigned int INDEX_MEASUREMENT_POSI = 0;
-  static const unsigned int INDEX_MEASUREMENT_VEL = 3;
-  static const unsigned int INDEX_MEASUREMENT_ORI = 6;
 
   typedef typename Eigen::Matrix<double, DIM_STATE_, 1> TypeVectorX;
   typedef typename Eigen::Matrix<double, DIM_MEASUREMENT, 1> TypeVectorY;
@@ -112,8 +105,8 @@ class ESKF {
 
   Eigen::Vector3d init_velocity_;
   Eigen::Vector3d velocity_ = Eigen::Vector3d::Zero();
-  Eigen::Isometry3d init_pose_ = Eigen::Isometry3d::Identity();
-  Eigen::Isometry3d pose_ = Eigen::Isometry3d::Identity();
+  Eigen::Matrix4d init_pose_ = Eigen::Matrix4d::Identity();
+  Eigen::Matrix4d pose_ = Eigen::Matrix4d::Identity();
 
   Eigen::Vector3d gyro_bias_ = Eigen::Vector3d::Zero();
   Eigen::Vector3d accel_bias_ = Eigen::Vector3d::Zero();
@@ -197,14 +190,16 @@ void ESKF::SetCovarianceP(const vector<double> &posi_noise,
   }
 }
 
-bool ESKF::Init(
-    sensor_msgs::Imu::Ptr &curr_imu_data, GPSGroup &curr_gps_,
-    const vector<double> &cov_prior_pos, const vector<double> &cov_prior_vel,
-    const vector<double> &cov_prior_ori,
-    const vector<double> &cov_prior_epsilon,
-    const vector<double> &cov_prior_delta, const vector<double> &cov_meas_pos,
-    const vector<double> &cov_meas_vel, const vector<double> &cov_meas_mag,
-    const vector<double> &cov_proc_gyro, const vector<double> &cov_proc_acc) {
+bool ESKF::Init(sensor_msgs::Imu::Ptr &curr_imu_data, GPSGroup &curr_gps_,
+                const vector<double> &cov_prior_pos,
+                const vector<double> &cov_prior_vel,
+                const vector<double> &cov_prior_ori,
+                const vector<double> &cov_prior_epsilon,
+                const vector<double> &cov_prior_delta,
+                const vector<double> &cov_meas_pos,
+                const vector<double> &cov_meas_vel,
+                const vector<double> &cov_proc_gyro,
+                const vector<double> &cov_proc_acc) {
   g_ = Eigen::Vector3d(0.0, 0.0, gravity);
   // w_ = Eigen::Vector3d(
   //     0.0, earth_rotation_speed * cos(curr_gps_.LLA[0] * kDegree2Radian),
@@ -220,18 +215,17 @@ bool ESKF::Init(
   C_.setIdentity();
   G_.block<3, 3>(INDEX_MEASUREMENT_POSI, INDEX_MEASUREMENT_POSI) =
       Eigen::Matrix3d::Identity();
-  G_.block<3, 3>(INDEX_MEASUREMENT_VEL, INDEX_MEASUREMENT_VEL) =
-      Eigen::Matrix3d::Identity();
-  G_.block<3, 3>(INDEX_MEASUREMENT_ORI, INDEX_MEASUREMENT_ORI) =
-      Eigen::Matrix3d::Identity();
-  // TODO:Set initial state
+  // F_.block<3, 3>(INDEX_STATE_POSI, INDEX_STATE_VEL) =
+  //     Eigen::Matrix3d::Identity();
+  // F_.block<3, 3>(INDEX_STATE_ORI, INDEX_STATE_ORI) = BuildSkewMatrix(-w_);
+  velocity_ = curr_gps_.velocity;
+
   Eigen::Quaterniond q_init =
       Eigen::AngleAxisd(0 * kDegree2Radian, Eigen::Vector3d::UnitZ()) *
       Eigen::AngleAxisd(0 * kDegree2Radian, Eigen::Vector3d::UnitY()) *
       Eigen::AngleAxisd(0 * kDegree2Radian, Eigen::Vector3d::UnitX());
-  pose_.matrix().block<3, 3>(0, 0) = q_init.toRotationMatrix();
-  pose_.matrix().block<3, 1>(0, 3) = curr_gps_.UTM;
-  velocity_ = curr_gps_.velocity;
+  pose_.block<3, 3>(0, 0) = q_init.toRotationMatrix();
+  pose_.block<3, 1>(0, 3) = curr_gps_.UTM;
 
   imu_data_buff_.clear();
   imu_data_buff_.push_back(curr_imu_data);
@@ -250,19 +244,10 @@ void ESKF::GetFGY(TypeMatrixF &F, TypeMatrixG &G, TypeVectorY &Y) {
 bool ESKF::Correct(const GPSGroup &curr_gps_data) {
   curr_gps_data_ = curr_gps_data;
   Eigen::Vector3d curr_gps_enu;
-  Eigen::Vector3d curr_gps_vel;
   curr_gps_enu << curr_gps_data_.UTM[0], curr_gps_data_.UTM[1],
       curr_gps_data_.UTM[2];
-  curr_gps_vel = curr_gps_data_.velocity;
-  Eigen::Quaterniond curr_mag_ori = curr_gps_data_.mag_rot;
-
   // measurement error，Y = gps_mesure - imu_predict, 依赖GPS提供初值
-  Y_.block<3, 3>(0, 0) = pose_.matrix().block<3, 1>(0, 3) - curr_gps_enu;
-  Y_.block<3, 3>(3, 0) = velocity_ - curr_gps_vel;
-  Y_.block<3, 3>(6, 0) =
-      (pose_.rotation().matrix().transpose() * curr_mag_ori.toRotationMatrix())
-          .log();
-
+  Y_ = pose_.block<3, 1>(0, 3) - curr_gps_enu;
   // Kalman 增益
   K_ = P_ * G_.transpose() *
        (G_ * P_ * G_.transpose() + C_ * R_ * C_.transpose()).inverse();
@@ -312,41 +297,22 @@ bool ESKF::Predict(const sensor_msgs::Imu::Ptr &curr_imu_data) {
 
 bool ESKF::UpdateErrorState(double t, const Eigen::Vector3d &accel) {
   Eigen::Matrix3d F_23 = BuildSkewMatrix(accel);
-  Eigen::Matrix3d F_33;
 
-  // TODO: check
   F_.block<3, 3>(INDEX_STATE_POSI, INDEX_STATE_VEL) =
       Eigen::Matrix3d::Identity();
   F_.block<3, 3>(INDEX_STATE_VEL, INDEX_STATE_ORI) = F_23;
   F_.block<3, 3>(INDEX_STATE_VEL, INDEX_STATE_ACC_BIAS) =
-      -pose_.block<3, 3>(0, 0);
-  F_.block<3, 3>(INDEX_STATE_VEL, INDEX_STATE_G_BIAS) =
-      Eigen::Matrix3d::Identity();
-  F_.block<3, 3>(INDEX_STATE_ORI, INDEX_STATE_ORI) = F_33;
+      pose_.block<3, 3>(0, 0);
   F_.block<3, 3>(INDEX_STATE_ORI, INDEX_STATE_GYRO_BIAS) =
-      -Eigen::Matrix3d::Identity();
-
+      -pose_.block<3, 3>(0, 0);
   // TODO: do not understand
   B_.block<3, 3>(INDEX_STATE_VEL, 3) = pose_.block<3, 3>(0, 0);
   B_.block<3, 3>(INDEX_STATE_ORI, 0) = -pose_.block<3, 3>(0, 0);
 
-  // x^ = F(t) * x + B(t) * w
+  // haiyx^ = F(t) * x + B(t) * w
   // discretization
   TypeMatrixF Fk = TypeMatrixF::Identity() + F_ * t;
   TypeMatrixB Bk = B_ * t;
-
-  Fk.block<3, 3>(INDEX_STATE_POSI, INDEX_STATE_POSI) =
-      Eigen::Matrix3d::Identity();
-  Fk.block<3, 3>(INDEX_STATE_VEL, INDEX_STATE_VEL) =
-      Eigen::Matrix3d::Identity();
-  Fk.block<3, 3>(INDEX_STATE_VEL, INDEX_STATE_G_BIAS) =
-      Eigen::Matrix3d::Identity();
-  Fk.block<3, 3>(INDEX_STATE_ACC_BIAS, INDEX_STATE_ACC_BIAS) =
-      Eigen::Matrix3d::Identity();
-  Fk.block<3, 3>(INDEX_STATE_GYRO_BIAS, INDEX_STATE_GYRO_BIAS) =
-      Eigen::Matrix3d::Identity();
-  Fk.block<3, 3>(INDEX_STATE_G_BIAS, INDEX_STATE_G_BIAS) =
-      Eigen::Matrix3d::Identity();
   // Observability analysis
   Ft_ = F_ * t;
   // update state：xk = Fk-1 * xk-1

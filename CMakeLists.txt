@@ -59,6 +59,7 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(Eigen3 REQUIRED)
 find_package(PCL 1.9 REQUIRED)
 find_package (GeographicLib REQUIRED)
+find_package (Sophus REQUIRED)
 
 message(Eigen: ${EIGEN3_INCLUDE_DIR})
 

@@ -69,7 +69,7 @@ struct GPSGroup {
   V3D LLA = Zero3d;
   V3D UTM = Zero3d;
   V3D velocity = Zero3d;
-  V3D magnetic = Zero3d;
+  Eigen::quaterniond mag_rot = Eigen::quaterniond(1, 0, 0, 0);
 };
 
 // Lidar data and imu dates for the curent process

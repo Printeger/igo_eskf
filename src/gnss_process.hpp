@@ -82,6 +82,8 @@ class GPSProcess {
   void set_extrinsic(const V3D &trans);
   void set_extrinsic(const V3D &trans, const M3D &rot);
   void LLA2UTM(const V3D &lla_, V3D &utm_);
+  void LLA2UTM(const double &lat, const double &lon, const double &alti,
+               double &utm_e, double &utm_n, double &utm_u);
   Eigen::Vector3d ECEF2ENU(const Eigen::Vector3d &vel_ecef, double lat_ref,
                            double lon_ref);
   void Process(const sensor_msgs::NavSatFix::ConstPtr &msg, GPSGroup &gps_out);
@@ -168,6 +170,22 @@ Eigen::Vector3d GPSProcess::ECEF2ENU(const Eigen::Vector3d &vel_ecef,
 void GPSProcess::LLA2UTM(const V3D &lla_, V3D &utm_enu) {
   geo_converter.Forward(lla_[0], lla_[1], lla_[2], utm_enu[0], utm_enu[1],
                         utm_enu[2]);
+  // double lon_, lat_, alt_;
+  // lat_ = lla_[0] / 180 * M_PI;
+  // lon_ = lla_[1] / 180 * M_PI;
+  // alt_ = lla_[2];
+  // proj_->LatlonToUtm(1, 1, &lon_, &lat_, &alt_);
+  // // proj_->LatlonToUtm(1, 1, &lat_, &lon_, &alt_);
+
+  // utm_enu[0] = lon_;
+  // utm_enu[1] = lat_;
+  // utm_enu[2] = alt_;
+}
+void GPSProcess::LLA2UTM(const double &lat, const double &lon,
+                         const double &alti, double &utm_e, double &utm_n,
+                         double &utm_u) {
+  geo_converter.Forward(lat, lon, alti, utm_e, utm_n, utm_u);
+  std::cout << utm_e << " " << utm_n << " " << utm_u << std::endl;
   // double lon_, lat_, alt_;
   // lat_ = lla_[0] / 180 * M_PI;
   // lon_ = lla_[1] / 180 * M_PI;

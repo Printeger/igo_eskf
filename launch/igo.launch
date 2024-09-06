@@ -9,8 +9,11 @@
     <node pkg="igo_eskf" type="igo_eskf" name="igo_eskf" output="screen" launch-prefix="gdb -ex run --args" /> 
 	</group>
 
-    <node pkg="igo_eskf" type="igo_eskf" name="igo_eskf" output="screen" /> 
+    <node pkg="igo_eskf" type="igo_eskf" name="igo_eskf" output="screen" >
+		<remap from ="/fusion_pose" to="/mavros/vision_pose/pose" /> 
+		<!-- <remap from ="/fusion_pose" to="/mavros/local_position/pose" />  -->
 
+	</node>
 	<!-- <node pkg="rosbag" type="play" name="rosbag_play" args="-wait-for-subscribers -r 1 /home/mint/data/uwb_imu_lidar_vicon/uwb_imu_lidar_vicon_square_2024-07-09-19-53-26.bag"/> -->
 
 	<group if="$(arg rviz)">

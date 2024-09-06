@@ -120,6 +120,7 @@ class ESKF {
   // std::deque<IMUData> imu_data_buff_;
 
   double curr_timestamp = 0.0;
+  double init_timestamp = 0;
 
  public:
   void GetFGY(TypeMatrixF &F, TypeMatrixG &G, TypeVectorY &Y);
@@ -200,6 +201,7 @@ bool ESKF::Init(sensor_msgs::Imu::Ptr &curr_imu_data, GPSGroup &curr_gps_,
                 const vector<double> &cov_meas_vel,
                 const vector<double> &cov_proc_gyro,
                 const vector<double> &cov_proc_acc) {
+  init_timestamp = curr_imu_data->header.stamp.toSec();
   g_ = Eigen::Vector3d(0.0, 0.0, gravity);
   // w_ = Eigen::Vector3d(
   //     0.0, earth_rotation_speed * cos(curr_gps_.LLA[0] * kDegree2Radian),
@@ -498,18 +500,20 @@ bool ESKF::ComputeVelocity(Eigen::Vector3d &curr_vel, Eigen::Vector3d &last_vel,
   last_vel = velocity_;
   velocity_ += delta_t * 0.5 * (curr_unbias_accel + last_unbias_accel);
   curr_vel = velocity_;
-  ROS_WARN("curr_unbias_accel: %f %f %f", curr_unbias_accel[0],
-           curr_unbias_accel[1], curr_unbias_accel[2]);
+  // ROS_WARN("curr_unbias_accel: %f %f %f", curr_unbias_accel[0],
+  //          curr_unbias_accel[1], curr_unbias_accel[2]);
 
   // ===============DEBUG===============
-  std::string write_path_1 =
-      "/home/xng/catkin_ws/src/inno_ligo/data/res/acc_curr.txt";
-  std::ofstream outfile_1;
-  outfile_1.open(write_path_1, std::ofstream::app);
-  outfile_1 << " " << curr_unbias_accel[0] << " " << curr_unbias_accel[1] << " "
-            << curr_unbias_accel[2] << " " << 0 << " " << 0 << " " << 0 << " "
-            << 1 << std::endl;
-  outfile_1.close();
+  // std::string write_path_1 =
+  //     "/home/xng/catkin_ws/src/inno_ligo/data/res/acc_curr.txt";
+  // std::ofstream outfile_1;
+  // outfile_1.open(write_path_1, std::ofstream::app);
+  // outfile_1 << " " << curr_unbias_accel[0] << " " << curr_unbias_accel[1] <<
+  // " "
+  //           << curr_unbias_accel[2] << " " << 0 << " " << 0 << " " << 0 << "
+  //           "
+  //           << 1 << std::endl;
+  // outfile_1.close();
 
   return true;
 }
@@ -538,6 +542,25 @@ void ESKF::EliminateError() {
 
   gyro_bias_ = gyro_bias_ - X_.block<3, 1>(INDEX_STATE_GYRO_BIAS, 0);
   accel_bias_ = accel_bias_ - X_.block<3, 1>(INDEX_STATE_ACC_BIAS, 0);
+
+  std::string write_path_1 =
+      "/home/nvidia/ws_uav_setup/src/igo_eskf/data/gyro_bias_" +
+      std::to_string(std::floor(init_timestamp)) + ".txt";
+  std::ofstream outfile_1;
+  outfile_1.open(write_path_1, std::ofstream::app);
+  outfile_1 << setprecision(16) << curr_timestamp << " " << gyro_bias_[0] << " "
+            << gyro_bias_[1] << " " << gyro_bias_[2] << " " << 0 << " " << 0
+            << " " << 0 << " " << 1 << std::endl;
+  outfile_1.close();
+  std::string write_path_2 =
+      "/home/nvidia/ws_uav_setup/src/igo_eskf/data/accel_bias_" +
+      std::to_string(std::floor(init_timestamp)) + ".txt";
+  std::ofstream outfile_2;
+  outfile_2.open(write_path_2, std::ofstream::app);
+  outfile_2 << setprecision(16) << curr_timestamp << " " << accel_bias_[0]
+            << " " << accel_bias_[1] << " " << accel_bias_[2] << " " << 0 << " "
+            << 0 << " " << 0 << " " << 1 << std::endl;
+  outfile_2.close();
 }
 
 Eigen::Vector3d ESKF::GetUnbiasAccel(const Eigen::Vector3d &accel) {

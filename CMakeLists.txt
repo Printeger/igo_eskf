@@ -94,20 +94,8 @@ catkin_package(
   DEPENDS EIGEN3 PCL
   INCLUDE_DIRS
 )
-#############
-## Testing ##
-#############
-# add_executable(test_node  test/test_1.cpp)
-# target_link_libraries(test_node ${catkin_LIBRARIES} gtest)
 
-#############
-## Run ##
-#############
-# add_executable(fastlio_mapping src/laserMapping.cpp include/ikd-Tree/ikd_Tree.cpp src/preprocess.cpp src/feature_extract.cpp)
-# target_link_libraries(fastlio_mapping ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${PYTHON_LIBRARIES})
-# target_include_directories(fastlio_mapping PRIVATE ${PYTHON_INCLUDE_DIRS})
-
-add_executable(igo_eskf src/igo_stream.cpp)
+add_executable(igo_eskf src/igo_stream.cpp include/wmm/)
 target_link_libraries(igo_eskf ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} ${GeographicLib_LIBRARIES})
 target_include_directories(igo_eskf PRIVATE ${PYTHON_INCLUDE_DIRS})
 

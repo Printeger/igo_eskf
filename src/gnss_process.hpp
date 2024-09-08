@@ -1,3 +1,4 @@
+#pragma once
 #include <common_lib.h>
 // #include <proj_api.h>
 #include <sensor_msgs/NavSatFix.h>
@@ -217,7 +218,7 @@ void GPSProcess::Process(const sensor_msgs::NavSatFix::ConstPtr &msg,
   gps_out.UTM = UTM;
   // gps_out = V4D(timestamp, UTM[0], UTM[1], UTM[2]);
 }
-
+// TO NED
 void GPSProcess::Process(const gnss_comm::GnssPVTSolnMsg::ConstPtr &msg,
                          GPSGroup &gps_out) {
   timestamp = msg->vel_acc;
@@ -228,8 +229,12 @@ void GPSProcess::Process(const gnss_comm::GnssPVTSolnMsg::ConstPtr &msg,
   gps_out.timestamp = timestamp;
   gps_out.LLA = LLA;
   gps_out.UTM = UTM;
+  gps_out.UTM[0] = UTM[0];
+  gps_out.UTM[1] = UTM[1];
+  gps_out.UTM[2] = UTM[2];
   Eigen::Vector3d vel_ecef(msg->vel_e, msg->vel_n, msg->vel_d);
-  gps_out.velocity = ECEF2ENU(vel_ecef, LLA[0], LLA[1]);
-  // gps_out.velocity = V3D(msg->vel_e, msg->vel_n, -msg->vel_d);
-  // gps_out = V4D(timestamp, UTM[0], UTM[1], UTM[2]);
+  Eigen::Vector3d vel_enu = ECEF2ENU(vel_ecef, LLA[0], LLA[1]);
+  gps_out.velocity[0] = vel_enu[0];
+  gps_out.velocity[1] = vel_enu[1];
+  gps_out.velocity[2] = vel_enu[2];
 }

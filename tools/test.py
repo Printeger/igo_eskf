@@ -1,47 +1,26 @@
 import numpy as np
-from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
+from scipy.stats import norm
 
-# Define the parameters for the elliptical paraboloid
-a = 1  # Semi-major axis
-b = 1  # Semi-minor axis
-h = 2  # Height scaling factor
+# 假设采集到的传感器输出数据
+data = np.array([1.01, 1.02, 0.99, 1.03, 1.00, 1.01, 1.02, 0.98, 1.00, 1.01])
 
-# Generate the meshgrid for the surface
-u = np.linspace(-2, 2, 100)
-v = np.linspace(-2, 2, 100)
-u, v = np.meshgrid(u, v)
+# 计算均值和标准差
+mean = np.mean(data)
+std_dev = np.std(data)
 
-# Calculate the x, y, and z coordinates of the surface
-x = a * u
-y = b * v
-z = (x**2 / a**2 + y**2 / b**2) * h
+print(f"噪声均值: {mean}")
+print(f"噪声标准差: {std_dev}")
 
-# Create a 3D plot
-fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
+# 绘制直方图和高斯分布拟合曲线
+plt.hist(data, bins=10, density=True, alpha=0.6, color='g')
 
-# Plot the surface
-ax.plot_surface(x, y, z, cmap='viridis')
-
-# Calculate the cross-section at x=1
-# x_cross = 0
-# y_cross = np.linspace(-2, 2, 10000)
-# z_cross = (x_cross**2 / a**2 + y_cross**2 / b**2) * h
-
-# # Plot the cross-section curve
-# ax.plot(x_cross * np.ones_like(y_cross), y_cross, z_cross-0.5, color='r', linewidth=3)
-
-# x_cross = np.linspace(-2, 2, 10000)
-# y_cross = 0
-# z_cross = (x_cross**2 / a**2 + y_cross**2 / b**2) * h
-# ax.plot(x_cross, y_cross* np.ones_like(x_cross), z_cross-0.5, color='r', linewidth=3)
-
-
-# Set labels and title
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
-ax.set_zlabel('Z')
-ax.legend()
+# 拟合高斯分布
+xmin, xmax = plt.xlim()
+x = np.linspace(xmin, xmax, 100)
+p = norm.pdf(x, mean, std_dev)
+plt.plot(x, p, 'k', linewidth=2)
+title = "Fit results: mean = %.2f,  std_dev = %.2f" % (mean, std_dev)
+plt.title(title)
 
 plt.show()

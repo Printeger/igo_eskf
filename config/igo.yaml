@@ -5,30 +5,41 @@ common:
     uwb_topic: "/nlink_linktrack_nodeframe2"
     mag_topic: "/mavros/imu/mag"
     vicon_topic: "/vrpn_client_node/uwb_ngx_tag/pose"
-    file_save_path: "/home/mint/ws_fusion_uwb/src/igo_eskf/data/"
+    wmm_cof_path: "/home/mint/ws_uav_setup/src/igo_eskf/config/WMM.COF"
+    file_save_path: "/home/mint/ws_uav_setup/src/igo_eskf/data/"
     en_vicon: true
     en_debug: true
     en_time_sync: true         # ONLY turn on when external time synchronization is really not possible
 
-covariance:
-    noise:
+params:
+    init_bias:
+        gyro: [2.0e-6, 2.0e-6, 2.0e-6]
+        accel: [3.0e-6, 3.0e-6, 3.0e-6]
+        mag: [1.0e-6, 1.0e-6, 1.0e-6]
+    cov: # init pior cov 
         posi: [1.0e-6, 1.0e-6, 1.0e-6]
-        vel: [1.0e-4, 1.0e-4, 1.0e-4]
+        vel: [1.0e-6, 1.0e-6, 1.0e-6]
         ori: [1.0e-6, 1.0e-6, 1.0e-6]
-        gyro: [1.0e-6, 1.0e-6, 1.0e-6]
-        acc: [1.0e-6, 1.0e-6, 1.0e-6]
-    process:
+        gyro_bias: [1.0e-6, 1.0e-6, 1.0e-6]
+        acc_bias: [1.0e-6, 1.0e-6, 1.0e-6]
+        mag_bias: [1.0e-6, 1.0e-6, 1.0e-6]
+        g_bias: [1.0e-6, 1.0e-6, 1.0e-6]
+    process: # process noise, 
+        vel: [1.0e-6, 1.0e-6, 1.0e-6]
+        rot: [1.0e-3, 1.0e-3, 1.0e-3]
         gyro: [1.0e-1, 1.0e-1, 1.0e-1]
-        accel: [1.0e-1, 1.0e-1, 1.0e-1]
-    measurement:
-        posi: [1.0e-3, 1.0e-3, 1.0e-3]
+        accel: [3.0e-1, 3.0e-1, 3.0e-1]
+        mag: [1.0e-3, 1.0e-3, 1.0e-3]
+    measurement: # measurement noise
+        posi: [1.0e-6, 1.0e-6, 1.0e-6]
         vel: [1.0e-3, 1.0e-3, 1.0e-3]
+        mag: [1.0e-3, 1.0e-3, 1.0e-3]
 
 options:
     local_gravity: 9.79484197226504
     en_sensor_init: true
-    init_duration: 10 # seconds
-    imu_filter_n_sigma: 1
+    init_duration: 5 # seconds
+    imu_filter_n_sigma: 10
     imu_slide_window_size: 5
     en_rtk_vel: false
         

@@ -84,7 +84,7 @@ class GPSProcess {
   void set_extrinsic(const V3D &trans, const M3D &rot);
   void LLA2UTM(const V3D &lla_, V3D &utm_);
   Eigen::Vector3d ECEF2ENU(const Eigen::Vector3d &vel_ecef, double lat_ref,
-                           double lon_ref);
+                           double lon_ref, double height);
   void Process(const sensor_msgs::NavSatFix::ConstPtr &msg, GPSGroup &gps_out);
   void Process(const gnss_comm::GnssPVTSolnMsg::ConstPtr &msg,
                GPSGroup &gps_out);
@@ -143,7 +143,42 @@ void GPSProcess::set_extrinsic(const V3D &trans, const M3D &rot) {
 void GPSProcess::set_gps_cov(const V3D &scaler) { cov_gps = scaler; }
 
 Eigen::Vector3d GPSProcess::ECEF2ENU(const Eigen::Vector3d &vel_ecef,
-                                     double lat_ref, double lon_ref) {
+                                     double lat_ref, double lon_ref,
+                                     double height) {
+  // double a = 6378137;
+  // double b = 6356752.3142;
+  // double f = (a - b) / a;
+  // double e_sq = f * (2 - f);
+  // double lamb = lat_ref * M_PI / 180;
+  // double phi = lon_ref * M_PI / 180;
+  // double s = sin(lamb);
+  // double N = a / sqrt(1 - e_sq * s * s);
+  // double sin_lambda = sin(lamb);
+  // double cos_lambda = cos(lamb);
+  // double sin_phi = sin(phi);
+  // double cos_phi = cos(phi);
+
+  // double x0 = (height + N) * cos_lambda * cos_phi;
+  // double y0 = (height + N) * cos_lambda * sin_phi;
+  // double z0 = (height + (1 - e_sq) * N) * sin_lambda;
+
+  // double xd = vel_ecef[0] - x0;
+  // double yd = vel_ecef[1] - y0;
+  // double zd = vel_ecef[2] - z0;
+
+  // double t = -cos_phi * xd - sin_phi * yd;
+
+  // double xEast = -sin_phi * xd + cos_phi * yd;
+  // double yNorth = t * sin_lambda + cos_lambda * zd;
+  // double zUp =
+  //     cos_lambda * cos_phi * xd + cos_lambda * sin_phi * yd + sin_lambda *
+  //     zd;
+
+  // Eigen::Vector3d vel_enu;
+  // vel_enu << xEast, yNorth, zUp;
+
+  // return vel_enu;
+
   // 计算旋转矩阵的各个元素
   double sin_lat = std::sin(lat_ref);
   double cos_lat = std::cos(lat_ref);
@@ -233,8 +268,9 @@ void GPSProcess::Process(const gnss_comm::GnssPVTSolnMsg::ConstPtr &msg,
   gps_out.UTM[1] = UTM[1];
   gps_out.UTM[2] = UTM[2];
   Eigen::Vector3d vel_ecef(msg->vel_e, msg->vel_n, msg->vel_d);
-  Eigen::Vector3d vel_enu = ECEF2ENU(vel_ecef, LLA[0], LLA[1]);
-  gps_out.velocity[0] = vel_enu[0];
+  Eigen::Vector3d vel_enu = ECEF2ENU(vel_ecef, LLA[0], LLA[1], LLA[2]);
+
+  gps_out.velocity[0] = -vel_enu[0];
   gps_out.velocity[1] = vel_enu[1];
   gps_out.velocity[2] = vel_enu[2];
 }

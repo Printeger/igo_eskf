@@ -209,9 +209,10 @@ bool ESKF::Init(sensor_msgs::Imu::Ptr &curr_imu_data, GPSGroup &curr_gps_) {
   G_.block<3, 3>(INDEX_MEASUREMENT_ORI, INDEX_MEASUREMENT_ORI) =
       Eigen::Matrix3d::Identity();
 
-  Eigen::Quaterniond q_init = Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitZ()) *
-                              Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitY()) *
-                              Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitX());
+  Eigen::Quaterniond q_init =
+      Eigen::AngleAxisd(eskf_params.init_heading, Eigen::Vector3d::UnitZ()) *
+      Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitY()) *
+      Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitX());
   pose_.matrix().block<3, 3>(0, 0) = q_init.toRotationMatrix();
   pose_.matrix().block<3, 1>(0, 3) = curr_gps_.UTM;
   velocity_ = curr_gps_.velocity;
@@ -243,11 +244,15 @@ bool ESKF::correct(const GPSGroup &curr_gps_data) {
   Y_.block<3, 1>(INDEX_MEASUREMENT_POSI, 0) =
       curr_gps_enu - pose_.translation();
   Y_.block<3, 1>(INDEX_MEASUREMENT_VEL, 0) = curr_gps_vel - velocity_;
+  //   Y_.block<3, 1>(INDEX_MEASUREMENT_VEL, 0) = Eigen::Vector3d(0, 0, 0);
+
   auto scale_ =
       (curr_mag - mag_bias_) *
       (curr_mag_ned.transpose() / (curr_mag_ned.transpose() * curr_mag_ned));
   Sophus::SO3d SO3_R(pose_.rotation().matrix().transpose() * scale_);
+
   Y_.block<3, 1>(INDEX_MEASUREMENT_ORI, 0) = SO3_R.log();
+  //   Y_.block<3, 1>(INDEX_MEASUREMENT_ORI, 0) = Eigen::Vector3d(0, 0, 0);
 
   K_ = P_ * G_.transpose() *
        (G_ * P_ * G_.transpose() + C_ * R_ * C_.transpose()).inverse();
@@ -272,6 +277,38 @@ bool ESKF::correct(const GPSGroup &curr_gps_data) {
               << q_heading.y() << " " << q_heading.z() << " " << q_heading.w()
               << std::endl;
     outfile_1.close();
+
+    std::string write_path_2 =
+        eskf_params.save_path + "vel_enu_" + eskf_params.time_str + ".txt";
+    std::ofstream outfile_2;
+    outfile_2.open(write_path_2, std::ofstream::app);
+    outfile_2 << setprecision(19) << curr_timestamp << " " << curr_gps_vel[0]
+              << " " << curr_gps_vel[1] << " " << curr_gps_vel[2] << " " << 0
+              << " " << 0 << " " << 0 << " " << 1 << std::endl;
+    outfile_2.close();
+
+    double ned_heading = atan2(curr_mag_ned[1], curr_mag_ned[0]);
+    Eigen::Quaterniond q_ned_heading =
+        Eigen::AngleAxisd(ned_heading, Eigen::Vector3d::UnitZ()) *
+        Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitX());
+    std::string write_path_3 =
+        eskf_params.save_path + "mag_ned_" + eskf_params.time_str + ".txt";
+    std::ofstream outfile_3;
+    outfile_3.open(write_path_3, std::ofstream::app);
+    outfile_3 << setprecision(19) << curr_timestamp << " " << curr_mag_ned[0]
+              << " " << curr_mag_ned[1] << " " << curr_mag_ned[2] << " "
+              << q_ned_heading.x() << " " << q_ned_heading.y() << " "
+              << q_ned_heading.z() << " " << q_ned_heading.w() << std::endl;
+    outfile_3.close();
+    std::string write_path_4 =
+        eskf_params.save_path + "mag_curr" + eskf_params.time_str + ".txt";
+    std::ofstream outfile_4;
+    outfile_4.open(write_path_4, std::ofstream::app);
+    outfile_4 << setprecision(19) << curr_timestamp << " " << curr_mag[0] << " "
+              << curr_mag[1] << " " << curr_mag[2] << " " << q_heading.x()
+              << " " << q_heading.y() << " " << q_heading.z() << " "
+              << q_heading.w() << std::endl;
   }
 
   eliminate_error();
@@ -320,8 +357,8 @@ bool ESKF::update_errror_state(double dt, const Eigen::Vector3d &accel,
       -Eigen::Matrix3d::Identity() * dt;
 
   // TODO:
-  B_.block<3, 3>(INDEX_STATE_VEL, 3) = Eigen::Matrix3d::Identity() * dt;
-  B_.block<3, 3>(INDEX_STATE_ORI, 0) = Eigen::Matrix3d::Identity() * dt;
+  //   B_.block<3, 3>(INDEX_STATE_VEL, 3) = pose_.rotation().matrix() * dt;
+  //   B_.block<3, 3>(INDEX_STATE_ORI, 0) = -pose_.rotation().matrix() * dt;
   // update state：xk = Fk-1 * xk-1
   X_ = F_ * X_;
   // The covariance matrix of the error state
@@ -427,11 +464,23 @@ void ESKF::eliminate_error() {
   Eigen::Matrix3d C_nn =
       Sophus::SO3d::exp(X_.block<3, 1>(INDEX_STATE_ORI, 0)).matrix();
   //   pose_.rotation().matrix() = pose_.rotation().matrix() * C_nn;
-  pose_.rotate(C_nn);
+  Eigen::Quaterniond q_tmp(C_nn);
+  Eigen::Vector3d eulerAngle = q_tmp.matrix().eulerAngles(0, 1, 2);
+  if ((std::abs(eulerAngle.x() * 180 / M_PI) < 10 ||
+       std::abs(std::abs(eulerAngle.x() * 180 / M_PI) - 180) < 10) &&
+      (std::abs(eulerAngle.y() * 180 / M_PI) < 10 ||
+       std::abs(std::abs(eulerAngle.y() * 180 / M_PI) - 180) < 10) &&
+      (std::abs(eulerAngle.z() * 180 / M_PI < 10) ||
+       std::abs(std::abs(eulerAngle.z() * 180 / M_PI) - 180) < 10)) {
+    pose_.rotate(C_nn);
+  } else {
+    ROS_WARN("Error: eulerAngle: %f %f %f", eulerAngle.x() * 180 / M_PI,
+             eulerAngle.y() * 180 / M_PI, eulerAngle.z() * 180 / M_PI);
+  }
 
   // TODO
-  gyro_bias_ = gyro_bias_ + X_.block<3, 1>(INDEX_STATE_GYRO_BIAS, 0);
-  accel_bias_ = accel_bias_ + X_.block<3, 1>(INDEX_STATE_ACC_BIAS, 0);
+  //   gyro_bias_ = gyro_bias_ + X_.block<3, 1>(INDEX_STATE_GYRO_BIAS, 0);
+  //   accel_bias_ = accel_bias_ + X_.block<3, 1>(INDEX_STATE_ACC_BIAS, 0);
   mag_bias_ = mag_bias_ + X_.block<3, 1>(INDEX_STATE_MAG_BIAS, 0);
 
   if (eskf_params.en_debug) {

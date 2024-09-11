@@ -175,7 +175,6 @@ bool sensor_init(deque<sensor_msgs::Imu::ConstPtr> &imu_buffer,
   // filtered_mag_x /= cnt_x;
   // filtered_mag_y /= cnt_y;
   init_heading = atan2(mean_mag[1], mean_mag[0]);
-  // init_heading = atan2(filtered_mag_y, filtered_mag_x);
   if (init_heading > M_PI) {
     init_heading -= 2 * M_PI;
   }
@@ -199,11 +198,11 @@ void format_imu(const sensor_msgs::Imu::ConstPtr &imu_in,
   imu_out->header.frame_id = imu_in->header.frame_id;
   // IMU+: x: forward, y: left, z: up -> x: forward, y: right, z: down
   imu_out->linear_acceleration.x =
-      imu_in->linear_acceleration.x - acc_offset[0];
+      imu_in->linear_acceleration.x * gravity - acc_offset[0];
   imu_out->linear_acceleration.y =
-      (imu_in->linear_acceleration.y - acc_offset[1]);
+      imu_in->linear_acceleration.y * gravity - acc_offset[1];
   imu_out->linear_acceleration.z =
-      (imu_in->linear_acceleration.z - acc_offset[2]);
+      imu_in->linear_acceleration.z * gravity - acc_offset[2];
 
   // zero gyro update
   if (std::abs(imu_out->linear_acceleration.x) < zero_gyro_threshold &&
@@ -291,6 +290,9 @@ bool calc_local_mag_field(GPSGroup &gps) {
   mag_proc->MAG_Geomag(Ellip, CoordSpherical, CoordGeodetic, MagneticModel,
                        &GeoMagneticElements);
   // 1 （nT） = 0.00001 （Guess）
+  // gps.mag_ned[0] = GeoMagneticElements.X * 0.00001;  // nT -> Guess
+  // gps.mag_ned[1] = GeoMagneticElements.Y * 0.00001;
+  // gps.mag_ned[2] = GeoMagneticElements.Z * 0.00001;
   gps.mag_ned[0] = GeoMagneticElements.X * 0.00001;  // nT -> Guess
   gps.mag_ned[1] = GeoMagneticElements.Y * 0.00001;
   gps.mag_ned[2] = GeoMagneticElements.Z * 0.00001;
@@ -327,6 +329,7 @@ bool sync_mag_gps(GPSGroup &gps) {
     }
     mavros_mag_buffer.erase(mavros_mag_buffer.begin(), prev(iter));
   }
+  // Origin Mag is NED, trans to ENU
   gps.mageto = V3D(closest_mag.magnetic_field.x, closest_mag.magnetic_field.y,
                    closest_mag.magnetic_field.z);
 
@@ -493,7 +496,9 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in) {
   }
   last_timestamp_imu = timestamp;
   if (en_sensor_init && !is_sensor_init) {
-    imu_buffer.push_back(tmp_msg);
+    sensor_msgs::Imu::Ptr temp_imu(new sensor_msgs::Imu(*tmp_msg));
+    format_imu(tmp_msg, temp_imu);
+    imu_buffer.push_back(temp_imu);
   } else {
     sensor_msgs::Imu::Ptr temp_imu(new sensor_msgs::Imu(*tmp_msg));
     format_imu(tmp_msg, temp_imu);
@@ -542,6 +547,9 @@ void mavros_mag_cbk(const sensor_msgs::MagneticField::ConstPtr &msg) {
     double local_stamp = get_stamp();
     tmp_msg.header.stamp = ros::Time().fromSec(local_stamp);
   }
+  tmp_msg.magnetic_field.x = msg->magnetic_field.y;
+  tmp_msg.magnetic_field.y = msg->magnetic_field.x;
+  tmp_msg.magnetic_field.z = -msg->magnetic_field.z;
   mavros_mag_buffer.push_back(tmp_msg);
   mtx_buffer.unlock();
 }
@@ -550,7 +558,7 @@ void rtk_cbk(const gnss_comm::GnssPVTSolnMsg::ConstPtr &gps_msg) {
   gnss_comm::GnssPVTSolnMsg::Ptr msg(new gnss_comm::GnssPVTSolnMsg(*gps_msg));
   double timestamp = 0.0;
   if (en_time_sync) {
-    double timestamp = get_stamp();
+    timestamp = get_stamp();
     msg->vel_acc = timestamp;
   } else {
     uint64_t recv_stamp = convertGpsToUnix(msg->time.week, msg->time.tow);
@@ -626,6 +634,24 @@ void gps_cbk(const sensor_msgs::NavSatFix::ConstPtr &gps_msg) {
   sig_buffer.notify_all();
 }
 
+void vicon_cbk(const geometry_msgs::PoseStamped::ConstPtr &msg_in) {
+  double timestamp = 0.0;
+  if (en_time_sync) {
+    timestamp = get_stamp();
+  }
+  if (en_debug) {
+    std::string write_path2 = file_save_path + "lio_" + time_str + ".txt";
+    std::ofstream outfile2;
+    outfile2.open(write_path2, std::ofstream::app);
+    outfile2 << setprecision(19) << timestamp << " " << msg_in->pose.position.x
+             << " " << msg_in->pose.position.y << " " << msg_in->pose.position.z
+             << " " << msg_in->pose.orientation.x << " "
+             << msg_in->pose.orientation.y << " " << msg_in->pose.orientation.z
+             << " " << msg_in->pose.orientation.w << std::endl;
+    outfile2.close();
+  }
+}
+
 // pub pose
 template <typename T>
 void set_posestamp(T &out) {
@@ -636,13 +662,6 @@ void set_posestamp(T &out) {
   out.pose.orientation.y = res_quat.y();
   out.pose.orientation.z = res_quat.z();
   out.pose.orientation.w = res_quat.w();
-  // out.pose.position.x = res_pos[1];
-  // out.pose.position.y = -res_pos[0];
-  // out.pose.position.z = res_pos[2];
-  // out.pose.orientation.x = res_quat.x();
-  // out.pose.orientation.y = res_quat.y();
-  // out.pose.orientation.z = res_quat.z();
-  // out.pose.orientation.w = res_quat.w();
 }
 
 void publish_odometry(const ros::Publisher &pubOdomAftMapped) {
@@ -817,6 +836,7 @@ int main(int argc, char **argv) {
   ros::Subscriber sub_imu = nh.subscribe(imu_topic, 200000, imu_cbk);
   ros::Subscriber sub_gps = nh.subscribe(gps_topic, 200000, rtk_cbk);
   ros::Subscriber sub_mag = nh.subscribe(mag_topic, 200000, mavros_mag_cbk);
+  ros::Subscriber sub_vicon = nh.subscribe(vicon_topic, 200000, vicon_cbk);
 
   // ros::Subscriber sub_uwb = nh.subscribe(uwb_topic, 200000, uwb_cbk);
 

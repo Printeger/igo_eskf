@@ -80,13 +80,12 @@ deque<sensor_msgs::MagneticField> mavros_mag_buffer;
 bool flg_first_gps = true, path_en = true, flg_EKF_inited, en_vicon = false,
      en_debug = false, is_mag_heading_init = false, en_time_sync = false,
      en_sensor_init = false, en_rtk_vel = false, is_sensor_init = false,
-     is_imu_recv = false;
+     is_imu_recv = false, is_1st_pose = true;
 std::string imu_topic, gps_topic, uwb_topic, vicon_topic, mag_topic,
     file_save_path, pose_topic, odom_topic, path_topic, wmm_cof_path;
 bool TRANSAXIS = true;
 
-vector<double> extrinT(3, 0.0);
-vector<double> extrinR(9, 0.0);
+Eigen::Isometry3d init_pose = Eigen::Isometry3d::Identity();
 
 // GPS with respect to IMU
 V3D GPS_T_wrt_IMU(Zero3d);
@@ -100,7 +99,7 @@ V3D acc_offset(Zero3d);
 V3D gyr_offset(Zero3d);
 V3D std_mag(Zero3d);
 int cnt_imu = 0;
-Eigen::Quaterniond res_quat(0, 0, 0, 1);
+Eigen::Quaterniond res_quat(1, 0, 0, 0);
 
 // shared_ptr<ImuProcess> imu_proc(new ImuProcess());
 shared_ptr<GPSProcess> gps_proc(new GPSProcess());
@@ -202,7 +201,14 @@ void format_imu(const sensor_msgs::Imu::ConstPtr &imu_in,
   imu_out->linear_acceleration.y =
       imu_in->linear_acceleration.y * gravity - acc_offset[1];
   imu_out->linear_acceleration.z =
-      imu_in->linear_acceleration.z * gravity - acc_offset[2];
+      imu_in->linear_acceleration.z * gravity - acc_offset[2];  // TODO
+
+  // imu_out->linear_acceleration.x =
+  //     imu_in->linear_acceleration.x - acc_offset[0];
+  // imu_out->linear_acceleration.y =
+  //     imu_in->linear_acceleration.y - acc_offset[1];
+  // imu_out->linear_acceleration.z =
+  //     imu_in->linear_acceleration.z - acc_offset[2];
 
   // zero gyro update
   if (std::abs(imu_out->linear_acceleration.x) < zero_gyro_threshold &&
@@ -212,7 +218,13 @@ void format_imu(const sensor_msgs::Imu::ConstPtr &imu_in,
     imu_out->angular_velocity.z = 0.0;
     // std::cout << "zero gyro update" << std::endl;
   } else {
-    imu_out->angular_velocity.x = imu_in->angular_velocity.x - gyr_offset[0];
+    // imu_out->angular_velocity.x =
+    //     (imu_in->angular_velocity.x - gyr_offset[0]) * M_PI / 180;
+    // imu_out->angular_velocity.y =
+    //     (imu_in->angular_velocity.y - gyr_offset[1]) * M_PI / 180;
+    // imu_out->angular_velocity.z =
+    //     (imu_in->angular_velocity.z - gyr_offset[2]) * M_PI / 180;
+    imu_out->angular_velocity.x = (imu_in->angular_velocity.x - gyr_offset[0]);
     imu_out->angular_velocity.y = (imu_in->angular_velocity.y - gyr_offset[1]);
     imu_out->angular_velocity.z = (imu_in->angular_velocity.z - gyr_offset[2]);
   }
@@ -222,10 +234,10 @@ void format_imu(const sensor_msgs::Imu::ConstPtr &imu_in,
     std::ofstream outfile1;
     outfile1.open(write_path1, std::ofstream::app);
     outfile1 << setprecision(19) << imu_in->header.stamp.toSec() << " "
-             << imu_in->linear_acceleration.x << " "
-             << imu_in->linear_acceleration.y << " "
-             << imu_in->linear_acceleration.z - gravity << " " << 0 << " " << 0
-             << " " << 0 << " " << 1 << std::endl;
+             << imu_out->linear_acceleration.x << " "
+             << imu_out->linear_acceleration.y << " "
+             << imu_out->linear_acceleration.z << " " << 0 << " " << 0 << " "
+             << 0 << " " << 1 << std::endl;
     outfile1.close();
     std::string write_path2 = file_save_path + "gyro_raw_" + time_str + ".txt";
     std::ofstream outfile2;
@@ -664,6 +676,19 @@ void set_posestamp(T &out) {
   out.pose.orientation.w = res_quat.w();
 }
 
+// pub pose
+template <typename T>
+void set_posestamp(T &out, Eigen::Isometry3d &in_) {
+  Eigen::Quaterniond in_quat(in_.rotation().matrix());
+  out.pose.position.x = in_.translation()[0];
+  out.pose.position.y = in_.translation()[1];
+  out.pose.position.z = in_.translation()[2];
+  out.pose.orientation.x = in_quat.x();
+  out.pose.orientation.y = in_quat.y();
+  out.pose.orientation.z = in_quat.z();
+  out.pose.orientation.w = in_quat.w();
+}
+
 void publish_odometry(const ros::Publisher &pubOdomAftMapped) {
   odomAftMapped.header.frame_id = "camera_init";
   odomAftMapped.child_frame_id = "body";
@@ -709,11 +734,26 @@ void publish_path(const ros::Publisher pubPath, ros::Time stamp) {
   }
 }
 
-void publish_pose(const ros::Publisher pub_pose, ros::Time stamp) {
-  set_posestamp(msg_body_pose);
+Eigen::Isometry3d res2isometry() {
+  Eigen::Isometry3d res_isometry = Eigen::Isometry3d::Identity();
+  Eigen::Quaterniond curr_quat(res_quat.w(), res_quat.x(), res_quat.y(),
+                               res_quat.z());
+  res_isometry.rotate(curr_quat.toRotationMatrix());
+  res_isometry.pretranslate(
+      Eigen::Vector3d(res_pos[0], res_pos[1], res_pos[2]));
+  return res_isometry;
+}
+
+geometry_msgs::PoseStamped publish_pose(const ros::Publisher pub_pose,
+                                        ros::Time stamp) {
+  Eigen::Isometry3d curr_T = res2isometry();
+  Eigen::Isometry3d rel_T = init_pose.inverse() * curr_T;
+  set_posestamp(msg_body_pose, rel_T);
   msg_body_pose.header.stamp = stamp;
   msg_body_pose.header.frame_id = "camera_init";
   pub_pose.publish(msg_body_pose);
+
+  return msg_body_pose;
 }
 
 int main(int argc, char **argv) {
@@ -749,9 +789,6 @@ int main(int argc, char **argv) {
   nh.param<bool>("common/en_time_sync", en_time_sync, true);
   eskf_proc.eskf_params.save_path = file_save_path;
   eskf_proc.eskf_params.en_debug = en_debug;
-
-  nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
-  nh.param<vector<double>>("mapping/extrinsic_R", extrinR, vector<double>());
 
   nh.param<vector<double>>("params/init_bias/gyro",
                            eskf_proc.eskf_params.init_gyro_bias,
@@ -904,7 +941,8 @@ int main(int argc, char **argv) {
             double curr_stamp = 0.0;
             eskf_proc.get_pose(res_pos, res_quat, curr_stamp);
             // eskf_proc.get_vel(res_vel);
-            // publish_pose(pubpose, ros::Time().fromSec(curr_stamp));
+            geometry_msgs::PoseStamped pred_pose =
+                publish_pose(pubpose, ros::Time().fromSec(curr_stamp));
             // if (path_en) publish_path(pubPath,
             // ros::Time().fromSec(curr_stamp));
             if (en_debug) {
@@ -912,11 +950,14 @@ int main(int argc, char **argv) {
                   file_save_path + "predict_pose_" + time_str + ".txt";
               std::ofstream outfile;
               outfile.open(write_path, std::ofstream::app);
-              outfile << setprecision(19) << curr_stamp << " " << res_pos[0]
-                      << " " << res_pos[1] << " " << res_pos[2] << " "
-                      << res_quat.x() << " " << res_quat.y() << " "
-                      << res_quat.z() << " " << res_quat.w() << std::endl;
-              outfile.close();
+              outfile << setprecision(19) << curr_stamp << " "
+                      << pred_pose.pose.position.x << " "
+                      << pred_pose.pose.position.y << " "
+                      << pred_pose.pose.position.z << " "
+                      << pred_pose.pose.orientation.x << " "
+                      << pred_pose.pose.orientation.y << " "
+                      << pred_pose.pose.orientation.z << " "
+                      << pred_pose.pose.orientation.w << std::endl;
               // std::string write_path2 =
               //     file_save_path + "predict_vel_" + time_str + ".txt";
               // std::ofstream outfile2;
@@ -943,7 +984,13 @@ int main(int argc, char **argv) {
 
             double curr_stamp = 0.0;
             eskf_proc.get_pose(res_pos, res_quat, curr_stamp);
-            publish_pose(pubpose, ros::Time().fromSec(curr_stamp));
+            eskf_proc.get_vel(res_vel);
+            if (is_1st_pose) {
+              init_pose = res2isometry();
+              is_1st_pose = false;
+            }
+            geometry_msgs::PoseStamped correct_pose =
+                publish_pose(pubpose, ros::Time().fromSec(curr_stamp));
             /******* Publish odometry *******/
             publish_odometry(pubOdomAftMapped);
             /******* Publish path *******/
@@ -953,11 +1000,23 @@ int main(int argc, char **argv) {
                 file_save_path + "fusion_pose_" + time_str + ".txt";
             std::ofstream outfile;
             outfile.open(write_path, std::ofstream::app);
-            outfile << setprecision(19) << curr_stamp << " " << res_pos[0]
-                    << " " << res_pos[1] << " " << res_pos[2] << " "
-                    << res_quat.x() << " " << res_quat.y() << " "
-                    << res_quat.z() << " " << res_quat.w() << std::endl;
+            outfile << setprecision(19) << curr_stamp << " "
+                    << correct_pose.pose.position.x << " "
+                    << correct_pose.pose.position.y << " "
+                    << correct_pose.pose.position.z << " "
+                    << correct_pose.pose.orientation.x << " "
+                    << correct_pose.pose.orientation.y << " "
+                    << correct_pose.pose.orientation.z << " "
+                    << correct_pose.pose.orientation.w << std::endl;
             outfile.close();
+            std::string write_path2 =
+                file_save_path + "predict_vel_" + time_str + ".txt";
+            std::ofstream outfile2;
+            outfile2.open(write_path2, std::ofstream::app);
+            outfile2 << setprecision(19) << curr_stamp << " " << res_vel[0]
+                     << " " << res_vel[1] << " " << res_vel[2] << " " << 0
+                     << " " << 0 << " " << 0 << " " << 1 << std::endl;
+            outfile2.close();
             count_++;
 
             std::cout << " pred_num: " << pred_num

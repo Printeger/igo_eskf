@@ -107,6 +107,51 @@ def main():
     plt.legend()
     plt.show()
 
+def plot_residual():
+    # Check if the file path is provided as a command line argument
+    if len(sys.argv) < 2:
+        print("Please provide the file path as a command line argument.")
+        return
+    
+    file_path = sys.argv[1]
+
+    # Read data from the text file
+    data = []
+    with open(file_path, 'r') as file:
+        for line in file:
+            values = line.split()
+            data.append([float(value) for value in values])
+
+    # Extract position and Euler angles from the data
+    timestamps = [row[0] for row in data]
+    residual = [[row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9]] for row in data]
+      
+    # Plot residual
+    fig, ax = plt.subplots(3, 1, sharex=True)
+    # Increase the size of the figure window
+    fig.set_size_inches(12, 5)
+
+    # Plot residual components
+    ax[0].plot(timestamps, [res[0] for res in residual], label='res_pos_x')
+    ax[0].plot(timestamps, [res[1] for res in residual], label='res_pos_y')
+    ax[0].plot(timestamps, [res[2] for res in residual], label='res_pos_z')
+
+
+    ax[1].plot(timestamps, [res[3] for res in residual], label='res_vel_x')
+    ax[1].plot(timestamps, [res[4] for res in residual], label='res_vel_y')
+    ax[1].plot(timestamps, [res[5] for res in residual], label='res_vel_z')
+    
+    ax[2].plot(timestamps, [res[6] for res in residual], label='res_ori_x')
+    ax[2].plot(timestamps, [res[7] for res in residual], label='res_ori_y')
+    ax[2].plot(timestamps, [res[8] for res in residual], label='res_ori_z')
+
+    ax[2].set_xlabel('Timestamp')
+
+    plt.legend()
+    plt.show()
+
+
 
 if __name__ == "__main__":
-    main()
+    # main()
+    plot_residual()

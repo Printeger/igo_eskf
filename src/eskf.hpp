@@ -136,7 +136,7 @@ class ESKF {
   double kDegree2Radian = M_PI / 180.0;
 
   double earth_rotation_speed = 7.272205216e-05;
-  double gravity = -9.79484197226504;
+  double gravity = 9.79484197226504;
   bool flg_eskf_init = false;
 };
 
@@ -185,7 +185,7 @@ void ESKF::set_R() {
 }
 
 bool ESKF::Init(sensor_msgs::Imu::Ptr &curr_imu_data, GPSGroup &curr_gps_) {
-  g_ = Eigen::Vector3d(0.0, 0.0, gravity);
+  g_ = Eigen::Vector3d(0.0, 0.0, -gravity);
   accel_bias_ = Eigen::Vector3d(eskf_params.init_accel_bias[0],
                                 eskf_params.init_accel_bias[1],
                                 eskf_params.init_accel_bias[2]);
@@ -250,8 +250,19 @@ bool ESKF::correct(const GPSGroup &curr_gps_data) {
       (curr_mag - mag_bias_) *
       (curr_mag_ned.transpose() / (curr_mag_ned.transpose() * curr_mag_ned));
   Sophus::SO3d SO3_R(pose_.rotation().matrix().transpose() * scale_);
-
-  Y_.block<3, 1>(INDEX_MEASUREMENT_ORI, 0) = SO3_R.log();
+  Eigen::Vector3d log_mag = SO3_R.log();
+  if ((std::abs(log_mag[2]) - 3.1415926) < 1e-2) {
+    log_mag[2] = 0.0;
+  }
+  if ((std::abs(log_mag[1]) - 3.1415926) < 1e-2) {
+    log_mag[1] = 0.0;
+  }
+  if ((std::abs(log_mag[0]) - 3.1415926) < 1e-2) {
+    log_mag[0] = 0.0;
+  }
+  Y_.block<3, 1>(INDEX_MEASUREMENT_ORI, 0) =
+      log_mag - X_.block<3, 1>(INDEX_STATE_ORI, 0);
+  //   Y_.block<3, 1>(INDEX_MEASUREMENT_ORI, 0) = SO3_R.log();
   //   Y_.block<3, 1>(INDEX_MEASUREMENT_ORI, 0) = Eigen::Vector3d(0, 0, 0);
 
   K_ = P_ * G_.transpose() *
@@ -287,28 +298,22 @@ bool ESKF::correct(const GPSGroup &curr_gps_data) {
               << " " << 0 << " " << 0 << " " << 1 << std::endl;
     outfile_2.close();
 
-    double ned_heading = atan2(curr_mag_ned[1], curr_mag_ned[0]);
-    Eigen::Quaterniond q_ned_heading =
-        Eigen::AngleAxisd(ned_heading, Eigen::Vector3d::UnitZ()) *
-        Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitY()) *
-        Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitX());
     std::string write_path_3 =
-        eskf_params.save_path + "mag_ned_" + eskf_params.time_str + ".txt";
+        eskf_params.save_path + "theta_" + eskf_params.time_str + ".txt";
     std::ofstream outfile_3;
     outfile_3.open(write_path_3, std::ofstream::app);
-    outfile_3 << setprecision(19) << curr_timestamp << " " << curr_mag_ned[0]
-              << " " << curr_mag_ned[1] << " " << curr_mag_ned[2] << " "
-              << q_ned_heading.x() << " " << q_ned_heading.y() << " "
-              << q_ned_heading.z() << " " << q_ned_heading.w() << std::endl;
+    outfile_3 << setprecision(19) << curr_timestamp << " " << SO3_R.log()[0]
+              << " " << SO3_R.log()[1] << " " << SO3_R.log()[2] << " " << 0
+              << " " << 0 << " " << 0 << " " << 1 << std::endl;
     outfile_3.close();
     std::string write_path_4 =
-        eskf_params.save_path + "mag_curr" + eskf_params.time_str + ".txt";
+        eskf_params.save_path + "residual_" + eskf_params.time_str + ".txt";
     std::ofstream outfile_4;
     outfile_4.open(write_path_4, std::ofstream::app);
-    outfile_4 << setprecision(19) << curr_timestamp << " " << curr_mag[0] << " "
-              << curr_mag[1] << " " << curr_mag[2] << " " << q_heading.x()
-              << " " << q_heading.y() << " " << q_heading.z() << " "
-              << q_heading.w() << std::endl;
+    outfile_4 << setprecision(19) << curr_timestamp << " " << Y_[0] << " "
+              << Y_[1] << " " << Y_[2] << " " << Y_[3] << " " << Y_[4] << " "
+              << Y_[5] << " " << Y_[6] << " " << Y_[7] << " " << Y_[8]
+              << std::endl;
   }
 
   eliminate_error();
@@ -330,7 +335,6 @@ bool ESKF::predict(const sensor_msgs::Imu::Ptr &curr_imu_data) {
   curr_timestamp = curr_imu_data->header.stamp.toSec();
   double delta_t = curr_imu_data->header.stamp.toSec() -
                    imu_data_buff_.front()->header.stamp.toSec();
-
   update_odom_estimation(delta_t);
 
   update_errror_state(delta_t, curr_meas_acc, curr_meas_gyro);
@@ -348,7 +352,7 @@ bool ESKF::update_errror_state(double dt, const Eigen::Vector3d &accel,
   F_.block<3, 3>(INDEX_STATE_VEL, INDEX_STATE_ORI) =
       -pose_.rotation().matrix() * Sophus::SO3d::hat(accel - accel_bias_) * dt;
   F_.block<3, 3>(INDEX_STATE_VEL, INDEX_STATE_ACC_BIAS) =
-      -pose_.rotation().matrix();
+      -pose_.rotation().matrix() * dt;
   F_.block<3, 3>(INDEX_STATE_VEL, INDEX_STATE_G_BIAS) =
       Eigen::Matrix3d::Identity() * dt;
   F_.block<3, 3>(INDEX_STATE_ORI, INDEX_STATE_ORI) =
@@ -442,6 +446,15 @@ bool ESKF::update_odom_estimation(double dt) {
               << tmp_q.y() << " " << tmp_q.z() << " " << tmp_q.w() << std::endl;
     outfile_2.close();
   }
+  auto acc_ = curr_accel + g_;
+  std::string write_path_3 = eskf_params.save_path + "acc_nobias_debug_" +
+                             eskf_params.time_str + ".txt";
+  std::ofstream outfile_3;
+  outfile_3.open(write_path_3, std::ofstream::app);
+  outfile_3 << setprecision(19) << curr_timestamp << " " << acc_(0) << " "
+            << acc_(1) << " " << acc_(2) << " " << 0 << " " << 0 << " " << 0
+            << " " << 1 << std::endl;
+  outfile_3.close();
 
   return true;
 }
@@ -464,65 +477,57 @@ void ESKF::eliminate_error() {
   Eigen::Matrix3d C_nn =
       Sophus::SO3d::exp(X_.block<3, 1>(INDEX_STATE_ORI, 0)).matrix();
   //   pose_.rotation().matrix() = pose_.rotation().matrix() * C_nn;
-  Eigen::Quaterniond q_tmp(C_nn);
-  Eigen::Vector3d eulerAngle = q_tmp.matrix().eulerAngles(0, 1, 2);
-  if ((std::abs(eulerAngle.x() * 180 / M_PI) < 10 ||
-       std::abs(std::abs(eulerAngle.x() * 180 / M_PI) - 180) < 10) &&
-      (std::abs(eulerAngle.y() * 180 / M_PI) < 10 ||
-       std::abs(std::abs(eulerAngle.y() * 180 / M_PI) - 180) < 10) &&
-      (std::abs(eulerAngle.z() * 180 / M_PI < 10) ||
-       std::abs(std::abs(eulerAngle.z() * 180 / M_PI) - 180) < 10)) {
-    pose_.rotate(C_nn);
-  } else {
-    ROS_WARN("Error: eulerAngle: %f %f %f", eulerAngle.x() * 180 / M_PI,
-             eulerAngle.y() * 180 / M_PI, eulerAngle.z() * 180 / M_PI);
-  }
+  pose_.rotate(C_nn);
+
+  //   Eigen::Quaterniond q_tmp(C_nn);
+  //   Eigen::Vector3d eulerAngle = q_tmp.matrix().eulerAngles(0, 1, 2);
+  //   if ((std::abs(eulerAngle.x() * 180 / M_PI) < 10 ||
+  //        std::abs(std::abs(eulerAngle.x() * 180 / M_PI) - 180) < 10) &&
+  //       (std::abs(eulerAngle.y() * 180 / M_PI) < 10 ||
+  //        std::abs(std::abs(eulerAngle.y() * 180 / M_PI) - 180) < 10) &&
+  //       (std::abs(eulerAngle.z() * 180 / M_PI < 10) ||
+  //        std::abs(std::abs(eulerAngle.z() * 180 / M_PI) - 180) < 10)) {
+  //     pose_.rotate(C_nn);
+  //   } else {
+  //     ROS_WARN("Error: eulerAngle: %f %f %f", eulerAngle.x() * 180 / M_PI,
+  //              eulerAngle.y() * 180 / M_PI, eulerAngle.z() * 180 / M_PI);
+  //   }
 
   // TODO
-  //   gyro_bias_ = gyro_bias_ + X_.block<3, 1>(INDEX_STATE_GYRO_BIAS, 0);
-  //   accel_bias_ = accel_bias_ + X_.block<3, 1>(INDEX_STATE_ACC_BIAS, 0);
-  mag_bias_ = mag_bias_ + X_.block<3, 1>(INDEX_STATE_MAG_BIAS, 0);
+  gyro_bias_ += X_.block<3, 1>(INDEX_STATE_GYRO_BIAS, 0);
+  accel_bias_ += X_.block<3, 1>(INDEX_STATE_ACC_BIAS, 0);
+  mag_bias_ += X_.block<3, 1>(INDEX_STATE_MAG_BIAS, 0);
+  g_ += X_.block<3, 1>(INDEX_STATE_G_BIAS, 0);
 
   if (eskf_params.en_debug) {
     std::string write_path_1 =
-        eskf_params.save_path + "acc_bias_" + eskf_params.time_str + ".txt";
+        eskf_params.save_path + "error_state_" + eskf_params.time_str + ".txt";
     std::ofstream outfile_1;
     outfile_1.open(write_path_1, std::ofstream::app);
-    outfile_1 << setprecision(19) << curr_timestamp << " " << accel_bias_(0)
-              << " " << accel_bias_(1) << " " << accel_bias_(2) << " " << 0
-              << " " << 0 << " " << 0 << " " << 1 << std::endl;
+    outfile_1 << setprecision(19) << curr_timestamp << " " << X_[0] << " "
+              << X_[1] << " " << X_[2] << " " << X_[3] << " " << X_[4] << " "
+              << X_[5] << " " << X_[6] << " " << X_[7] << " " << X_[8] << " "
+              << X_[9] << " " << X_[10] << " " << X_[11] << " " << X_[12] << " "
+              << X_[13] << " " << X_[14] << " " << X_[15] << " " << X_[16]
+              << " " << X_[17] << " " << X_[18] << " " << X_[19] << " "
+              << X_[20] << std::endl;
     outfile_1.close();
+
+    Eigen::Vector3d rota_ = pose_.rotation().matrix().eulerAngles(2, 1, 0);
     std::string write_path_2 =
-        eskf_params.save_path + "gyro_bias_" + eskf_params.time_str + ".txt";
+        eskf_params.save_path + "state_" + eskf_params.time_str + ".txt";
     std::ofstream outfile_2;
     outfile_2.open(write_path_2, std::ofstream::app);
-    outfile_2 << setprecision(19) << curr_timestamp << " " << gyro_bias_(0)
-              << " " << gyro_bias_(1) << " " << gyro_bias_(2) << " " << 0 << " "
-              << 0 << " " << 0 << " " << 1 << std::endl;
-    outfile_2.close();
-    std::string write_path_3 =
-        eskf_params.save_path + "mag_bias_" + eskf_params.time_str + ".txt";
-    std::ofstream outfile_3;
-    outfile_3.open(write_path_3, std::ofstream::app);
-    outfile_3 << setprecision(19) << curr_timestamp << " " << mag_bias_(0)
-              << " " << mag_bias_(1) << " " << mag_bias_(2) << " " << 0 << " "
-              << 0 << " " << 0 << " " << 1 << std::endl;
-    outfile_3.close();
-
-    Eigen::Quaterniond q_tmp(C_nn);
-    std::string write_path_4 =
-        eskf_params.save_path + "error_rot_" + eskf_params.time_str + ".txt";
-    std::ofstream outfile_4;
-    outfile_4.open(write_path_4, std::ofstream::app);
-    outfile_4 << setprecision(19) << curr_timestamp << " "
-              << X_.block<3, 1>(INDEX_STATE_ORI, 0)[0] << " "
-              << X_.block<3, 1>(INDEX_STATE_ORI, 0)[1] << " "
-              << X_.block<3, 1>(INDEX_STATE_ORI, 0)[2] << " " << q_tmp.x()
-              << " " << q_tmp.y() << " " << q_tmp.z() << " " << q_tmp.w()
-              << std::endl;
+    outfile_2 << setprecision(19) << curr_timestamp << " "
+              << pose_.translation()[0] << " " << pose_.translation()[1] << " "
+              << pose_.translation()[2] << " " << velocity_[0] << " "
+              << velocity_[1] << " " << velocity_[2] << " " << rota_[0] << " "
+              << rota_[1] << " " << rota_[2] << " " << gyro_bias_[0] << " "
+              << gyro_bias_[1] << " " << gyro_bias_[2] << " " << accel_bias_[0]
+              << " " << accel_bias_[1] << " " << accel_bias_[2] << " "
+              << mag_bias_[0] << " " << mag_bias_[1] << " " << mag_bias_[2]
+              << " " << g_[0] << " " << g_[1] << " " << g_[2] << std::endl;
   }
-
-  g_ += X_.block<3, 1>(INDEX_STATE_G_BIAS, 0);
 }
 
 void ESKF::get_pose(V3D &pos, Eigen::Quaterniond &quat,

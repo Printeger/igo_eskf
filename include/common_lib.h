@@ -3,16 +3,12 @@
 
 #include <eigen_conversions/eigen_msg.h>
 #include <nav_msgs/Odometry.h>
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
 #include <sensor_msgs/Imu.h>
 #include <sensor_msgs/NavSatFix.h>
 #include <so3_math.h>
 #include <tf/transform_broadcaster.h>
 
 #include <Eigen/Eigen>
-
-// #include "../src/inno_pcl_point.h"
 
 using namespace std;
 using namespace Eigen;
@@ -38,14 +34,6 @@ using namespace Eigen;
                                 mat.data() + mat.rows() * mat.cols())
 #define DEBUG_FILE_DIR(name) (string(string(ROOT_DIR) + "Log/" + name))
 
-typedef pcl::PointXYZINormal PointType;
-// typedef PointXYZTIFES PointType;
-typedef pcl::PointCloud<PointType> PointCloudXYZI;
-// typedef fast_lio::Pose6D Pose6D;
-// typedef inno_ligo::Pose6D Pose6D;
-// typedef pcl::PointXYZINormal PointType;
-// typedef pcl::PointCloud<PointType> PointCloudXYZI;
-typedef vector<PointType, Eigen::aligned_allocator<PointType>> PointVector;
 typedef Vector3d V3D;
 typedef Vector4d V4D;
 typedef Matrix3d M3D;
@@ -72,27 +60,6 @@ struct GPSGroup {
   V3D mageto = Zero3d;
   V3D mag_ned = Zero3d;
   Eigen::Quaterniond mag_rot = Eigen::Quaterniond(1, 0, 0, 0);
-};
-
-// Lidar data and imu dates for the curent process
-struct MeasureGroup {
-  MeasureGroup() {
-    lidar_beg_time = 0.0;
-    gps_beg_time = 0.0;
-    this->lidar.reset(new PointCloudXYZI());
-    this->gps.clear();  // TODO
-  };
-  double lidar_beg_time;
-  double lidar_end_time;
-  double gps_beg_time;
-  double gps_end_time;
-
-  PointCloudXYZI::Ptr lidar;
-  // deque<sensor_msgs::NavSatFix::Ptr> gps;
-  deque<V4D> gps;
-  deque<GPSGroup> gps_;
-  // deque<sensor_msgs::Imu::ConstPtr> imu;
-  deque<sensor_msgs::Imu::Ptr> imu;
 };
 
 struct StatesGroup {
@@ -188,93 +155,6 @@ T rad2deg(T radians) {
 template <typename T>
 T deg2rad(T degrees) {
   return degrees * PI_M / 180.0;
-}
-
-// template <typename T>
-// auto set_pose6d(const double t, const Matrix<T, 3, 1> &a,
-//                 const Matrix<T, 3, 1> &g, const Matrix<T, 3, 1> &v,
-//                 const Matrix<T, 3, 1> &p, const Matrix<T, 3, 3> &R) {
-//   Pose6D rot_kp;
-//   rot_kp.offset_time = t;
-//   for (int i = 0; i < 3; i++) {
-//     rot_kp.acc[i] = a(i);
-//     rot_kp.gyr[i] = g(i);
-//     rot_kp.vel[i] = v(i);
-//     rot_kp.pos[i] = p(i);
-//     for (int j = 0; j < 3; j++) rot_kp.rot[i * 3 + j] = R(i, j);
-//   }
-//   return move(rot_kp);
-// }
-
-/* comment
-plane equation: Ax + By + Cz + D = 0
-convert to: A/D*x + B/D*y + C/D*z = -1
-solve: A0*x0 = b0
-where A0_i = [x_i, y_i, z_i], x0 = [A/D, B/D, C/D]^T, b0 = [-1, ..., -1]^T
-normvec:  normalized x0
-*/
-template <typename T>
-bool esti_normvector(Matrix<T, 3, 1> &normvec, const PointVector &point,
-                     const T &threshold, const int &point_num) {
-  MatrixXf A(point_num, 3);
-  MatrixXf b(point_num, 1);
-  b.setOnes();
-  b *= -1.0f;
-
-  for (int j = 0; j < point_num; j++) {
-    A(j, 0) = point[j].x;
-    A(j, 1) = point[j].y;
-    A(j, 2) = point[j].z;
-  }
-  normvec = A.colPivHouseholderQr().solve(b);
-
-  for (int j = 0; j < point_num; j++) {
-    if (fabs(normvec(0) * point[j].x + normvec(1) * point[j].y +
-             normvec(2) * point[j].z + 1.0f) > threshold) {
-      return false;
-    }
-  }
-
-  normvec.normalize();
-  return true;
-}
-
-float calc_dist(PointType p1, PointType p2) {
-  float d = (p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y) +
-            (p1.z - p2.z) * (p1.z - p2.z);
-  return d;
-}
-
-template <typename T>
-bool esti_plane(Matrix<T, 4, 1> &pca_result, const PointVector &point,
-                const T &threshold) {
-  Matrix<T, NUM_MATCH_POINTS, 3> A;
-  Matrix<T, NUM_MATCH_POINTS, 1> b;
-  A.setZero();
-  b.setOnes();
-  b *= -1.0f;
-
-  for (int j = 0; j < NUM_MATCH_POINTS; j++) {
-    A(j, 0) = point[j].x;
-    A(j, 1) = point[j].y;
-    A(j, 2) = point[j].z;
-  }
-
-  Matrix<T, 3, 1> normvec = A.colPivHouseholderQr().solve(b);
-
-  T n = normvec.norm();
-  pca_result(0) = normvec(0) / n;
-  pca_result(1) = normvec(1) / n;
-  pca_result(2) = normvec(2) / n;
-  pca_result(3) = 1.0 / n;
-
-  for (int j = 0; j < NUM_MATCH_POINTS; j++) {
-    if (fabs(pca_result(0) * point[j].x + pca_result(1) * point[j].y +
-             pca_result(2) * point[j].z + pca_result(3)) > threshold) {
-      return false;
-    }
-  }
-  return true;
 }
 
 #endif

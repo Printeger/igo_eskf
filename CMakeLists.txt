@@ -48,7 +48,6 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
   std_msgs
-  pcl_ros
   tf
   message_generation
   eigen_conversions
@@ -57,7 +56,6 @@ find_package(catkin REQUIRED COMPONENTS
 )
 
 find_package(Eigen3 REQUIRED)
-find_package(PCL 1.9 REQUIRED)
 find_package (GeographicLib REQUIRED)
 find_package (Sophus REQUIRED)
 
@@ -66,7 +64,6 @@ message(Eigen: ${EIGEN3_INCLUDE_DIR})
 include_directories(
 	${catkin_INCLUDE_DIRS} 
   ${EIGEN3_INCLUDE_DIR}
-  ${PCL_INCLUDE_DIRS}
   ${PYTHON_INCLUDE_DIRS}
   ${GeographicLib_INCLUDE_DIRS}
   include)
@@ -91,14 +88,10 @@ generate_messages(
 
 catkin_package(
   CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs message_runtime 
-  DEPENDS EIGEN3 PCL
+  DEPENDS EIGEN3 
   INCLUDE_DIRS
 )
 
 add_executable(igo_eskf src/igo_stream.cpp include/wmm/)
-target_link_libraries(igo_eskf ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} ${GeographicLib_LIBRARIES})
+target_link_libraries(igo_eskf ${catkin_LIBRARIES} ${PYTHON_LIBRARIES} ${GeographicLib_LIBRARIES})
 target_include_directories(igo_eskf PRIVATE ${PYTHON_INCLUDE_DIRS})
-
-# add_executable(thread_test src/sensor_flow.cpp)
-# target_link_libraries(thread_test ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${PYTHON_LIBRARIES})
-# target_include_directories(thread_test PRIVATE ${PYTHON_INCLUDE_DIRS})

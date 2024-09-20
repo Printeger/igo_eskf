@@ -1,7 +1,7 @@
 common:
     lid_topic:  "/iv_points"
     gps_topic: "/ublox_driver/receiver_pvt"
-    imu_topic:  "/livox/imu"
+    imu_topic:  "/livox/imu"  # /livox/imu  /mavros/imu/data_raw
     uwb_topic: "/nlink_linktrack_nodeframe2"
     mag_topic: "/mavros/imu/mag"
     vicon_topic: "/mavros/vision_pose/pose"
@@ -21,24 +21,24 @@ params:
         vel: [0.25, 0.25, 0.25]  # 0.001 m/s TODO:
         ori: [1.0e-2, 1.0e-2, 1.0e-2]
         gyro_bias: [1.0e-6, 1.0e-6, 1.0e-6]
-        acc_bias: [1.0e-6, 1.0e-6, 1.0e-6]
+        acc_bias: [1.0e-1, 1.0e-1, 1.0e-1]
         mag_bias: [1.0e-6, 1.0e-6, 1.0e-6]
         g_bias: [1.0e-6, 1.0e-6, 1.0e-6]
     process: # process noise Q_sigma //TODO: 
         vel: [1.0e-6, 1.0e-6, 1.0e-6]
         rot: [1.0e-3, 1.0e-3, 1.0e-3]
         gyro: [1.0e-5, 1.0e-5, 1.0e-5]
-        accel: [3.0e-5, 3.0e-5, 3.0e-5]
+        accel: [1.0e-2, 1.0e-2, 1.0e-2]
         mag: [1.0e-6, 1.0e-6, 1.0e-6]
     measurement: # measurement noise H
-        posi: [0.04, 0.04, 0.04]  # 0.01 m
-        vel: [1.0e-2, 1.0e-2, 1.0e-2]
+        posi: [1.0e-5, 1.0e-5, 1.0e-5]  # 0.04 m
+        vel: [1.0e-4, 1.0e-4, 1.0e-4]
         mag: [1.0e-6, 1.0e-6, 1.0e-6]
 
 options:
     local_gravity: 9.79484197226504
     en_sensor_init: true
-    init_duration: 5 # seconds
+    init_duration: 10 # seconds
     imu_filter_n_sigma: 10
     imu_slide_window_size: 5
     en_rtk_vel: false

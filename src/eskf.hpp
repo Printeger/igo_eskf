@@ -244,26 +244,24 @@ bool ESKF::correct(const GPSGroup &curr_gps_data) {
   Y_.block<3, 1>(INDEX_MEASUREMENT_POSI, 0) =
       curr_gps_enu - pose_.translation();
   Y_.block<3, 1>(INDEX_MEASUREMENT_VEL, 0) = curr_gps_vel - velocity_;
-  //   Y_.block<3, 1>(INDEX_MEASUREMENT_VEL, 0) = Eigen::Vector3d(0, 0, 0);
 
+  // Rotation
   auto scale_ =
       (curr_mag - mag_bias_) *
       (curr_mag_ned.transpose() / (curr_mag_ned.transpose() * curr_mag_ned));
   Sophus::SO3d SO3_R(pose_.rotation().matrix().transpose() * scale_);
   Eigen::Vector3d log_mag = SO3_R.log();
-  if ((std::abs(log_mag[2]) - 3.1415926) < 1e-2) {
+  if (std::abs(std::abs(log_mag[2]) - 3.1415926) < 1e-2) {
     log_mag[2] = 0.0;
   }
-  if ((std::abs(log_mag[1]) - 3.1415926) < 1e-2) {
+  if (std::abs(std::abs(log_mag[1]) - 3.1415926) < 1e-2) {
     log_mag[1] = 0.0;
   }
-  if ((std::abs(log_mag[0]) - 3.1415926) < 1e-2) {
+  if (std::abs(std::abs(log_mag[0]) - 3.1415926) < 1e-2) {
     log_mag[0] = 0.0;
   }
   Y_.block<3, 1>(INDEX_MEASUREMENT_ORI, 0) =
       log_mag - X_.block<3, 1>(INDEX_STATE_ORI, 0);
-  //   Y_.block<3, 1>(INDEX_MEASUREMENT_ORI, 0) = SO3_R.log();
-  //   Y_.block<3, 1>(INDEX_MEASUREMENT_ORI, 0) = Eigen::Vector3d(0, 0, 0);
 
   K_ = P_ * G_.transpose() *
        (G_ * P_ * G_.transpose() + C_ * R_ * C_.transpose()).inverse();
@@ -298,14 +296,6 @@ bool ESKF::correct(const GPSGroup &curr_gps_data) {
               << " " << 0 << " " << 0 << " " << 1 << std::endl;
     outfile_2.close();
 
-    std::string write_path_3 =
-        eskf_params.save_path + "theta_" + eskf_params.time_str + ".txt";
-    std::ofstream outfile_3;
-    outfile_3.open(write_path_3, std::ofstream::app);
-    outfile_3 << setprecision(19) << curr_timestamp << " " << SO3_R.log()[0]
-              << " " << SO3_R.log()[1] << " " << SO3_R.log()[2] << " " << 0
-              << " " << 0 << " " << 0 << " " << 1 << std::endl;
-    outfile_3.close();
     std::string write_path_4 =
         eskf_params.save_path + "residual_" + eskf_params.time_str + ".txt";
     std::ofstream outfile_4;
@@ -427,12 +417,12 @@ bool ESKF::update_odom_estimation(double dt) {
   if (eskf_params.en_debug) {
     auto acc_ = (curr_accel - accel_bias_) + g_;
     std::string write_path_1 =
-        eskf_params.save_path + "acc_norot_" + eskf_params.time_str + ".txt";
+        eskf_params.save_path + "vel_pred_" + eskf_params.time_str + ".txt";
     std::ofstream outfile_1;
     outfile_1.open(write_path_1, std::ofstream::app);
-    outfile_1 << setprecision(19) << curr_timestamp << " " << acc_(0) << " "
-              << acc_(1) << " " << acc_(2) << " " << 0 << " " << 0 << " " << 0
-              << " " << 1 << std::endl;
+    outfile_1 << setprecision(19) << curr_timestamp << " " << velocity_[0]
+              << " " << velocity_[1] << " " << velocity_[2] << " " << 0 << " "
+              << 0 << " " << 0 << " " << 1 << std::endl;
     outfile_1.close();
 
     auto acc_1_ = pose_.rotation().matrix() * (curr_accel - accel_bias_) + g_;

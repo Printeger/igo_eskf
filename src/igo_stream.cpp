@@ -126,7 +126,7 @@ bool sensor_init(deque<sensor_msgs::Imu::ConstPtr> &imu_buffer,
   double sum_heading = 0.0;
   for (const auto &imu : imu_buffer) {
     sum_acc += V3D(imu->linear_acceleration.x, imu->linear_acceleration.y,
-                   imu->linear_acceleration.z - gravity);
+                   imu->linear_acceleration.z - 1.0);
     sum_gyr += V3D(imu->angular_velocity.x, imu->angular_velocity.y,
                    imu->angular_velocity.z);
   }
@@ -137,42 +137,10 @@ bool sensor_init(deque<sensor_msgs::Imu::ConstPtr> &imu_buffer,
   acc_offset_ = sum_acc / imu_buffer.size();
   gyr_offset_ = sum_gyr / imu_buffer.size();
   mean_mag = sum_mag / mag_buffer_.size();
-  // calculate mag std
-  // V3D sum_unbias_mag(Zero3d);
-  // for (const auto &mag : mag_buffer_) {
-  //   auto tmp_mag = mag;
-  //   tmp_mag.magnetic_field.x -= mean_mag[0];
-  //   tmp_mag.magnetic_field.y -= mean_mag[1];
-  //   tmp_mag.magnetic_field.z -= mean_mag[2];
-  //   sum_unbias_mag += V3D(tmp_mag.magnetic_field.x *
-  //   tmp_mag.magnetic_field.x,
-  //                         tmp_mag.magnetic_field.y *
-  //                         tmp_mag.magnetic_field.y, tmp_mag.magnetic_field.z
-  //                         * tmp_mag.magnetic_field.z);
-  // }
-  // std_mag_ << std::sqrt(sum_unbias_mag[0] / mag_buffer_.size()),
-  //     std::sqrt(sum_unbias_mag[1] / mag_buffer_.size()),
-  //     std::sqrt(sum_unbias_mag[2] / mag_buffer_.size());
-  // // remove ouliers
-  // // std::cout << "std_mag_:" << std_mag_ << std::endl;
-  // double filtered_mag_x = 0.0, filtered_mag_y = 0.0;
-  // int cnt_x = 0, cnt_y = 0;
-  // for (const auto &mag : mag_buffer_) {
-  //   if (std::abs(mag.magnetic_field.x) < imu_filter_n_sigma * std_mag_[0]) {
-  //     filtered_mag_x += mag.magnetic_field.x;
-  //     cnt_x++;
-  //   }
-  //   if (std::abs(mag.magnetic_field.y) < imu_filter_n_sigma * std_mag_[1]) {
-  //     filtered_mag_y += mag.magnetic_field.y;
-  //     cnt_y++;
-  //   }
-  // }
-  // if (cnt_x == 0 || cnt_y == 0) {
-  //   ROS_ERROR("Magnetic field data is too noisy!");
-  //   return false;
-  // }
-  // filtered_mag_x /= cnt_x;
-  // filtered_mag_y /= cnt_y;
+
+  ROS_WARN("acc_offset_ %f %f %f", acc_offset_[0], acc_offset_[1],
+           acc_offset_[2]);
+
   init_heading = atan2(mean_mag[1], mean_mag[0]);
   if (init_heading > M_PI) {
     init_heading -= 2 * M_PI;
@@ -197,11 +165,14 @@ void format_imu(const sensor_msgs::Imu::ConstPtr &imu_in,
   imu_out->header.frame_id = imu_in->header.frame_id;
   // IMU+: x: forward, y: left, z: up -> x: forward, y: right, z: down
   imu_out->linear_acceleration.x =
-      imu_in->linear_acceleration.x * gravity - acc_offset[0];
+      (imu_in->linear_acceleration.x - acc_offset[0]) * gravity;
   imu_out->linear_acceleration.y =
-      imu_in->linear_acceleration.y * gravity - acc_offset[1];
+      (imu_in->linear_acceleration.y - acc_offset[1]) * gravity;
   imu_out->linear_acceleration.z =
-      imu_in->linear_acceleration.z * gravity - acc_offset[2];  // TODO
+      (imu_in->linear_acceleration.z - acc_offset[2]) * gravity;  // TODO
+  // imu_out->linear_acceleration.x = (imu_in->linear_acceleration.x) * gravity;
+  // imu_out->linear_acceleration.y = (imu_in->linear_acceleration.y) * gravity;
+  // imu_out->linear_acceleration.z = (imu_in->linear_acceleration.z) * gravity;
 
   // imu_out->linear_acceleration.x =
   //     imu_in->linear_acceleration.x - acc_offset[0];
@@ -218,12 +189,6 @@ void format_imu(const sensor_msgs::Imu::ConstPtr &imu_in,
     imu_out->angular_velocity.z = 0.0;
     // std::cout << "zero gyro update" << std::endl;
   } else {
-    // imu_out->angular_velocity.x =
-    //     (imu_in->angular_velocity.x - gyr_offset[0]) * M_PI / 180;
-    // imu_out->angular_velocity.y =
-    //     (imu_in->angular_velocity.y - gyr_offset[1]) * M_PI / 180;
-    // imu_out->angular_velocity.z =
-    //     (imu_in->angular_velocity.z - gyr_offset[2]) * M_PI / 180;
     imu_out->angular_velocity.x = (imu_in->angular_velocity.x - gyr_offset[0]);
     imu_out->angular_velocity.y = (imu_in->angular_velocity.y - gyr_offset[1]);
     imu_out->angular_velocity.z = (imu_in->angular_velocity.z - gyr_offset[2]);
@@ -308,8 +273,22 @@ bool calc_local_mag_field(GPSGroup &gps) {
   gps.mag_ned[0] = GeoMagneticElements.X * 0.00001;  // nT -> Guess
   gps.mag_ned[1] = GeoMagneticElements.Y * 0.00001;
   gps.mag_ned[2] = GeoMagneticElements.Z * 0.00001;
-  std::cout << "heading: " << atan2(gps.mag_ned[1], gps.mag_ned[0])
-            << std::endl;
+  gps.mag_ned.normalize();
+  // std::cout << "heading: " << atan2(gps.mag_ned[1], gps.mag_ned[0]) * 180 /
+  // M_PI
+  //           << std::endl;
+
+  if (en_debug) {
+    // std::string write_path = file_save_path + "mag_ned_" + time_str + ".txt";
+    // std::ofstream outfile;
+    // outfile.open(write_path, std::ofstream::app);
+    // outfile << setprecision(19) << gps.timestamp << " " << gps.mag_ned[0] <<
+    // " "
+    //         << gps.mag_ned[1] << " " << gps.mag_ned[2] << " " << 0 << " " <<
+    //         0
+    //         << " " << 0 << " " << 1 << std::endl;
+    // outfile.close();
+  }
 
   mag_proc->MAG_FreeMagneticModelMemory(MagneticModel);
   return true;
@@ -342,8 +321,22 @@ bool sync_mag_gps(GPSGroup &gps) {
     mavros_mag_buffer.erase(mavros_mag_buffer.begin(), prev(iter));
   }
   // Origin Mag is NED, trans to ENU
-  gps.mageto = V3D(closest_mag.magnetic_field.x, closest_mag.magnetic_field.y,
-                   closest_mag.magnetic_field.z);
+  Eigen::Vector3d mag_meas(closest_mag.magnetic_field.x,
+                           closest_mag.magnetic_field.y,
+                           closest_mag.magnetic_field.z);
+  mag_meas.normalize();
+  gps.mageto = mag_meas;
+  std::cout << "heading curr: "
+            << atan2(gps.mageto[1], gps.mageto[0]) * 180 / M_PI << std::endl;
+  if (en_debug) {
+    std::string write_path = file_save_path + "mag_meas_" + time_str + ".txt";
+    std::ofstream outfile;
+    outfile.open(write_path, std::ofstream::app);
+    outfile << setprecision(19) << gps.timestamp << " " << mag_meas[0] << " "
+            << mag_meas[1] << " " << mag_meas[2] << " " << 0 << " " << 0 << " "
+            << 0 << " " << 1 << std::endl;
+    outfile.close();
+  }
 
   if (calc_local_mag_field(gps)) {
     return true;
@@ -509,12 +502,15 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in) {
   last_timestamp_imu = timestamp;
   if (en_sensor_init && !is_sensor_init) {
     sensor_msgs::Imu::Ptr temp_imu(new sensor_msgs::Imu(*tmp_msg));
-    format_imu(tmp_msg, temp_imu);
+    // format_imu(tmp_msg, temp_imu);
     imu_buffer.push_back(temp_imu);
   } else {
     sensor_msgs::Imu::Ptr temp_imu(new sensor_msgs::Imu(*tmp_msg));
+    // temp_imu->linear_acceleration.x = tmp_msg->linear_acceleration.x *
+    // gravity; temp_imu->linear_acceleration.y = tmp_msg->linear_acceleration.y
+    // * gravity; temp_imu->linear_acceleration.z =
+    // tmp_msg->linear_acceleration.z * gravity;
     format_imu(tmp_msg, temp_imu);
-
     imu_buffer.push_back(temp_imu);
 
     // imu_window_buffer.push_back(temp_imu);
@@ -986,7 +982,8 @@ int main(int argc, char **argv) {
             eskf_proc.get_pose(res_pos, res_quat, curr_stamp);
             eskf_proc.get_vel(res_vel);
             if (is_1st_pose) {
-              init_pose = res2isometry();
+              // init_pose = res2isometry();  // TODO
+              init_pose = Eigen::Isometry3d::Identity();
               is_1st_pose = false;
             }
             geometry_msgs::PoseStamped correct_pose =
